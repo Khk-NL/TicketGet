@@ -111,7 +111,7 @@ jobs:
       - name: Test frontend
         run: npm test
       - name: Check bundled Android executor syntax
-        run: python -m compileall -q src-tauri/resources/hatickets/mobile src-tauri/resources/hatickets/shared
+        run: python -c "import ast,pathlib; root=pathlib.Path('src-tauri/resources/hatickets'); [ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in root.rglob('*.py')]"
       - name: Test backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build and upload installers
