@@ -24,15 +24,17 @@ let accountError = "";
 try { initialAccounts = loadAccounts(localStorage); } catch { accountError = "账号读取或迁移失败，原数据已保留，请检查本机存储后重试"; }
 
 const savedSettings = readLocal("tickets.settings", {});
+const savedAndroid = readLocal("tickets.android", {});
 export const runtime = reactive({
     accounts: initialAccounts, accountError,
     ready: false, tasks: {}, logs: [], clock: null, syncing: false, storageError: "", subscriptions: {},
     settings: normalizeSettings(savedSettings),
+    android: { serial: String(savedAndroid.serial || ""), pythonPath: String(savedAndroid.pythonPath || ""), adbPath: String(savedAndroid.adbPath || ""), environment: null, logs: {} },
 });
 export const activeTasks = computed(() => Object.values(runtime.tasks).filter(isActive));
 export const taskList = computed(() => Object.values(runtime.tasks).sort((a, b) => b.updatedAt - a.updatedAt));
 export function isActive(task) { return task && ["waiting", "running"].includes(task.status); }
-export const statusLabels = { waiting: "等待开始", found: "发现余票", completed: "监控结束", running: "执行中", succeeded: "待支付", failed: "未完成", cancelled: "已停止", needs_action: "需要处理", interrupted: "已中断" };
+export const statusLabels = { waiting: "等待开始", found: "发现余票", completed: "监控结束", running: "执行中", succeeded: "待付款", failed: "未完成", cancelled: "已停止", needs_action: "需要处理", device_error: "设备错误", interrupted: "已中断" };
 export function currentTask(platform) {
     const purchases = taskList.value.filter(task => task.platform === platform && task.mode !== "monitor");
     return purchases.find(isActive) || purchases[0];
@@ -72,7 +74,7 @@ function acceptTask(task, notify = false) {
     if (notify) {
         record(task.platform, task.message, task.status);
         if (!isActive(task) && previous?.status !== task.status && !(task.mode === "monitor" && task.status === "succeeded")) {
-            Notification[["succeeded", "found"].includes(task.status) ? "success" : task.status === "failed" ? "error" : "info"]({ title: statusLabels[task.status], content: task.message, duration: 7000 });
+            Notification[["succeeded", "found"].includes(task.status) ? "success" : ["failed", "device_error"].includes(task.status) ? "error" : "info"]({ title: statusLabels[task.status], content: task.message, duration: 7000 });
             if (["succeeded", "found"].includes(task.status) && runtime.settings.sound) new Audio(successAudio).play().catch(() => {});
         }
         if (task.notificationStatus === "failed" && previous?.notificationStatus !== "failed") {
@@ -106,6 +108,19 @@ export async function startTask(request) {
 
 export async function stopTask(id) {
     try { await call("cancel_ticket_task", { id }); } catch (error) { Message.error(errorText(error)); }
+}
+
+export function saveAndroidSettings(value) {
+    const { serial, pythonPath, adbPath } = value;
+    Object.assign(runtime.android, { serial: String(serial || ""), pythonPath: String(pythonPath || ""), adbPath: String(adbPath || "") });
+    saveLocal("tickets.android", { serial: runtime.android.serial, pythonPath: runtime.android.pythonPath, adbPath: runtime.android.adbPath });
+}
+
+export async function refreshAndroidEnvironment() {
+    const { pythonPath, adbPath } = runtime.android;
+    const environment = await call("android_environment", { pythonPath, adbPath });
+    runtime.android.environment = environment;
+    return environment;
 }
 
 function persistAccounts(state) {
@@ -206,6 +221,11 @@ export function initializeRuntime() {
             try { syncWechatStatus(await call("get_wechat_status")); }
             catch (error) { Message.warning(`微信绑定状态同步失败：${errorText(error)}`); }
             await listen("ticket-task", event => acceptTask(event.payload, true));
+            await listen("android-log", ({ payload }) => {
+                const entries = runtime.android.logs[payload.taskId] || [];
+                entries.push(String(payload.line || ""));
+                runtime.android.logs[payload.taskId] = entries.slice(-200);
+            });
             await listen("ticket-credentials", async ({ payload }) => {
                 let credentials;
                 try { credentials = payload.platform === "dm" ? await damaiCredentials() : biliCredentials(payload.projectId, payload.userAgent); }

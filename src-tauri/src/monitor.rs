@@ -1,5 +1,5 @@
 use crate::{
-    bilibili, clock, dm,
+    android, bilibili, clock, dm,
     http::{self, first, string, Account},
     notifications::WechatConfig,
     tasks::{self, Outcome, TaskContext},
@@ -37,9 +37,10 @@ fn purchase_config(config: &Config, platform: &str) -> Result<Option<Value>, Str
     data.insert("skuId".into(), if platform == "dm" { json!(config.sku_id) } else { json!(config.sku_id.parse::<i64>().map_err(|_| "票档编号无效")?) });
     data.insert("screenId".into(), if platform == "dm" { json!(config.screen_id) } else { json!(config.screen_id.parse::<i64>().map_err(|_| "场次编号无效")?) });
     data.insert("wechat".into(), serde_json::to_value(&config.wechat).map_err(|_| "通知参数无效")?);
-    match platform {
-        "dm" => dm::validate(&purchase)?,
-        "bilibili" => bilibili::validate(&purchase)?,
+    match (platform, purchase["executor"].as_str().unwrap_or("api")) {
+        ("dm", "api") => dm::validate(&purchase)?,
+        ("dm", "android") => android::validate(&purchase)?,
+        ("bilibili", "api") => bilibili::validate(&purchase)?,
         _ => return Err("不支持的购票平台".into()),
     }
     Ok(Some(purchase))
@@ -404,6 +405,9 @@ async fn run_auto(context: &TaskContext, config: &Config, purchase: Value) -> Re
                     }
                     Ok(child) if child.status == "needs_action" || child.status == "cancelled" => {
                         return Ok(Outcome { status: "needs_action", message: format!("自动购票需要人工确认：{}", child.message), order_url: child.order_url });
+                    }
+                    Ok(child) if child.status == "device_error" => {
+                        return Ok(Outcome { status: "device_error", message: child.message, order_url: None });
                     }
                     Ok(child) => context.report("running", format!("购票未成功：{}；继续监控", child.message), attempt, None),
                     Err(error) if error.contains("已有运行中的购票任务") => {

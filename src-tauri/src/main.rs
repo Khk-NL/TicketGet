@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Manager;
-use tickets::{bilibili, clock, dm, notifications, subscriptions, tasks, utils, version};
+use tickets::{android, bilibili, clock, dm, notifications, subscriptions, tasks, utils, version};
 
 fn main() {
     tauri::Builder::default()
@@ -37,6 +37,8 @@ fn main() {
             tasks::cancel_ticket_task,
             tasks::list_ticket_tasks,
             tasks::provide_ticket_credentials,
+            android::android_environment,
+            android::setup_android_environment,
             clock::sync_clock,
             subscriptions::refresh_subscription,
             subscriptions::remove_subscription,

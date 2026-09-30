@@ -17,6 +17,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
+      "resources": ["resources/hatickets/"],
       "identifier": "com.tickets",
       "icon": [
         "icons/32x32.png",

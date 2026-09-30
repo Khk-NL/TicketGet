@@ -31,6 +31,7 @@ onMounted(() => initializeRuntime().catch(error => Message.error(errorText(error
             </nav>
             <div class="nav-divider"></div>
             <router-link to="/monitor" class="nav-item" :class="{ selected: route.path === '/monitor' }"><UiIcon name="search" /><span>余票监控</span><span class="nav-count" v-if="activeMonitors.length">{{ activeMonitors.length }}</span></router-link>
+            <router-link to="/android" class="nav-item" :class="{ selected: route.path === '/android' }"><UiIcon name="settings" /><span>Android 设备</span><UiIcon name="chevron" class="nav-chevron" /></router-link>
             <router-link to="/activity" class="nav-item" :class="{ selected: route.path === '/activity' }"><UiIcon name="activity" /><span>任务与记录</span><span class="nav-count" v-if="activeTasks.length">{{ activeTasks.length }}</span></router-link>
             <div class="sidebar-bottom">
                 <div class="sidebar-note"><span class="live-dot" :class="{ muted: !activeTasks.length }"></span>{{ activeTasks.length ? `${activeTasks.length} 个任务运行中` : "准备好下一场相遇" }}<small>保持应用运行，等待好消息。</small></div>

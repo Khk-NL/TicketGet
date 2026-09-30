@@ -1,5 +1,5 @@
 use crate::{
-    bilibili, clock, dm, monitor,
+    android, bilibili, clock, dm, monitor,
     notifications::{self, WechatConfig},
 };
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,7 @@ pub struct TaskSnapshot {
     pub mode: String,
     pub id: String,
     pub platform: String,
+    pub executor: String,
     pub title: String,
     pub status: String,
     pub message: String,
@@ -212,10 +213,11 @@ fn validate(request: &TaskRequest) -> Result<(), String> {
         }
         return Ok(());
     }
-    match request.platform.as_str() {
-        "dm" => dm::validate(&request.config),
-        "bilibili" => bilibili::validate(&request.config),
-        _ => Err("不支持的购票平台".into()),
+    match (request.platform.as_str(), request.config["executor"].as_str().unwrap_or("api")) {
+        ("dm", "api") => dm::validate(&request.config),
+        ("dm", "android") => android::validate(&request.config),
+        ("bilibili", "api") => bilibili::validate(&request.config),
+        _ => Err("该平台不支持所选购票执行方式".into()),
     }
 }
 
@@ -254,6 +256,8 @@ impl TaskManager {
             mode: request.mode.clone(),
             id: request.id.clone(),
             platform: request.platform.clone(),
+            executor: if request.mode == "monitor" { &request.config["purchase"]["executor"] } else { &request.config["executor"] }
+                .as_str().unwrap_or("api").into(),
             title: request.title.clone(),
             status: "waiting".into(),
             message: "任务已就绪，等待开始".into(),
@@ -386,6 +390,8 @@ where
                 });
                 let message = if monitoring {
                     format!("【Tickets 余票提醒】\n{platform}\n{}\n检测到可购票档，请及时到官方页面确认。库存随时变化。\n{url}", request.title)
+                } else if request.config["executor"] == "android" {
+                    format!("【Tickets 购票提醒】\n{platform}\n{}\n大麦 App 检测到待付款状态，请核对官方订单并人工付款。\n{url}", request.title)
                 } else {
                     format!("【Tickets 购票提醒】\n{platform}\n{}\n订单已创建，尚未支付，请及时前往官方页面完成支付。\n{url}", request.title)
                 };
@@ -452,8 +458,9 @@ fn launch_task(app: AppHandle, manager: TaskManager, mut request: TaskRequest) -
                 return monitor::run(&context).await;
             }
             context.report("running", "开始执行购票任务", 0, None);
-            match context.request.platform.as_str() {
-                "dm" => dm::run(&context).await,
+            match (context.request.platform.as_str(), context.request.config["executor"].as_str()) {
+                ("dm", Some("android")) => android::run(&context).await,
+                ("dm", _) => dm::run(&context).await,
                 _ => bilibili::run(&context).await,
             }
         };

@@ -21,11 +21,13 @@ const isBili = props.platform === "bilibili";
 const draftKey = `tickets.${props.monitoring ? "monitor-draft" : "draft"}.${props.platform}`;
 const saved = cleanAccountDraft(readLocal(draftKey, {}));
 const form = reactive({
-    url: "", accountId: "", useProxy: false, count: 1, maxAttempts: 5, intervalMs: 1000,
+    url: "", accountId: "", executor: "api", useProxy: false, count: 1, maxAttempts: 5, intervalMs: 1000,
     buyer: "", tel: "", scheduled: false, startAt: "", offsetMs: runtime.clock?.offsetMs || 0,
     ...saved, buyers: [], address: "", date: "",
     offsetMs: runtime.clock?.offsetMs ?? saved.offsetMs ?? 0,
 });
+const androidForm = reactive({ keyword: "", targetTitle: "", targetVenue: "", city: "", date: "", price: "", priceIndex: 0, users: "" });
+const androidUsers = computed(() => androidForm.users.split(/[,，\n]/).map(value => value.trim()).filter(Boolean));
 watch(form, value => {
     if (runtime.accountError) return;
     const { buyers, address, date, mode, ...draft } = value;
@@ -65,7 +67,7 @@ let generation = 0;
 let loadedAccount = "";
 watch(() => starting.value || loading.value || ticketLoading.value || searchLoading.value, value => emit("busy", value));
 
-watch(() => [form.url, selectedAccount.value?.id, selectedAccount.value?.cookie, form.useProxy, JSON.stringify(proxyAccount(runtime.settings, form.useProxy)), form.useProxy ? runtime.subscriptions[runtime.settings.subscriptionId]?.updatedAt : 0], () => {
+watch(() => [form.url, form.executor, selectedAccount.value?.id, selectedAccount.value?.cookie, form.useProxy, JSON.stringify(proxyAccount(runtime.settings, form.useProxy)), form.useProxy ? runtime.subscriptions[runtime.settings.subscriptionId]?.updatedAt : 0], () => {
     generation++;
     if (running.value) return;
     project.value = null; buyers.value = []; addresses.value = [];
@@ -74,7 +76,7 @@ watch(() => [form.url, selectedAccount.value?.id, selectedAccount.value?.cookie,
 });
 watch(() => runtime.clock, sample => { if (sample && !locked.value) form.offsetMs = sample.offsetMs; });
 watch(autoPurchase, enabled => {
-    if (!enabled || !project.value) return;
+    if (!enabled || !project.value || form.executor === "android") return;
     loadBuyers();
     if (isBili) loadAddresses();
 });
@@ -101,16 +103,22 @@ async function loadProject() {
     project.value = null; screenId.value = ""; ticketId.value = ""; buyers.value = []; addresses.value = [];
     form.buyers = []; form.address = ""; form.date = "";
     try {
-        const raw = await call(isBili ? "bili_project" : "dm_project", { account: credentials, projectId: isBili ? Number(projectNumber) : projectNumber, ...(!isBili ? { allowUnavailable: monitoring.value } : {}) });
+        const raw = await call(isBili ? "bili_project" : "dm_project", { account: credentials, projectId: isBili ? Number(projectNumber) : projectNumber, ...(!isBili ? { allowUnavailable: monitoring.value || form.executor === "android" } : {}) });
         if (version !== generation) return;
         project.value = isBili ? normalizeBili(raw, projectNumber) : normalizeDamai(raw, projectNumber);
+        if (!isBili) {
+            androidForm.keyword = project.value.name; androidForm.targetTitle = project.value.name;
+            const [city, venue] = project.value.venue.split(" · ");
+            androidForm.city = city || ""; androidForm.targetVenue = venue || "";
+        }
         loadedAccount = JSON.stringify(credentials);
         if (project.value.saleStart > Date.now() + form.offsetMs) {
             form.startAt = beijingInput(project.value.saleStart); form.scheduled = true;
         }
         record(props.platform, `已加载 ${project.value.name}`, "success");
-        const pending = monitoring.value ? [] : [loadBuyers(version)];
-        if (isBili && !monitoring.value) pending.push(loadAddresses(version));
+        const needsApiBuyers = (!monitoring.value || autoPurchase.value) && form.executor !== "android";
+        const pending = needsApiBuyers ? [loadBuyers(version)] : [];
+        if (isBili && needsApiBuyers) pending.push(loadAddresses(version));
         if (project.value.screens.length === 1) pending.push(selectScreen(project.value.screens[0]));
         await Promise.allSettled(pending);
     } catch (value) { if (version === generation) fail(value); }
@@ -155,8 +163,9 @@ async function loadAddresses(version = generation) {
 }
 
 async function selectScreen(item) {
-    if (locked.value || ticketLoading.value || (!monitoring.value && item.disabled)) return;
+    if (locked.value || ticketLoading.value || (!monitoring.value && form.executor !== "android" && item.disabled)) return;
     screenId.value = item.id; ticketId.value = "";
+    if (!isBili) androidForm.date = item.name;
     if (isBili || item.tickets.length) return;
     ticketLoading.value = true; error.value = "";
     const version = generation;
@@ -180,8 +189,9 @@ async function changeDate() {
 }
 
 function selectTicket(item) {
-    if (locked.value || ticketLoading.value || !screen.value || (!monitoring.value && (screen.value.disabled || item.disabled))) return;
+    if (locked.value || ticketLoading.value || !screen.value || (!monitoring.value && form.executor !== "android" && (screen.value.disabled || item.disabled))) return;
     ticketId.value = item.id;
+    if (!isBili) androidForm.price = item.name;
     if (form.count > maxCount.value) { form.count = maxCount.value; form.buyers = []; }
     const start = item.saleStart || project.value.saleStart;
     if (start > Date.now() + form.offsetMs) { form.scheduled = true; form.startAt = beijingInput(start); }
@@ -202,7 +212,11 @@ async function startMonitor(options) {
     }
     if (loadedAccount !== JSON.stringify(account())) { error.value = "账号或代理设置已变化，请重新加载商品"; return; }
     let purchase;
-    if (autoPurchase.value) {
+    if (autoPurchase.value && form.executor === "android") {
+        const problem = androidProblem(false);
+        if (problem) { error.value = problem; Message.warning(problem); return; }
+        purchase = purchaseDetails();
+    } else if (autoPurchase.value) {
         const address = addresses.value.find(item => String(item.id) === form.address);
         const problem = validateSelection({ platform: props.platform, project: project.value,
             screen: { ...screen.value, disabled: false }, ticket: { ...ticket.value, disabled: false },
@@ -217,14 +231,14 @@ async function startMonitor(options) {
     }
     starting.value = true;
     try {
-        if (autoPurchase.value && !isBili) await damaiCredentials();
+        if (autoPurchase.value && !isBili && form.executor !== "android") await damaiCredentials();
         const { endAt, wechat, ...timing } = options;
         const created = await startTask({
             id: `${props.platform}-${crypto.randomUUID()}`, mode: "monitor", platform: props.platform,
             title: `${project.value.name} · ${screen.value.name} · ${ticket.value.name}`,
             ...timing,
             config: { account: account(), projectId: String(project.value.id), screenId: String(screen.value.id), skuId: String(ticket.value.id), date: form.date, endAt, wechat,
-                ...(purchase ? { purchase, purchaseMaxAttempts: form.maxAttempts, purchaseIntervalMs: form.intervalMs } : {}) },
+                ...(purchase ? { purchase, purchaseMaxAttempts: form.executor === "android" ? 1 : form.maxAttempts, purchaseIntervalMs: form.executor === "android" ? 1000 : form.intervalMs } : {}) },
         });
         Message.success("监控已添加，可以继续添加其他活动或票档");
         emit("created", created);
@@ -233,12 +247,31 @@ async function startMonitor(options) {
 }
 
 function purchaseDetails(address) {
+    if (!isBili && form.executor === "android") return {
+        executor: "android", count: form.count,
+        android: { serial: runtime.android.serial, pythonPath: runtime.android.pythonPath,
+            adbPath: runtime.android.adbPath, keyword: androidForm.keyword.trim(),
+            targetTitle: androidForm.targetTitle.trim(), targetVenue: androidForm.targetVenue.trim(),
+            city: androidForm.city.trim(), date: androidForm.date.trim(), price: androidForm.price.trim(),
+            priceIndex: Number(androidForm.priceIndex), users: [...androidUsers.value] },
+    };
     return isBili ? {
-        unitPrice: ticket.value.price, count: form.count,
+        executor: "api", unitPrice: ticket.value.price, count: form.count,
         buyers: buyers.value.filter(item => form.buyers.includes(item.key)).map(item => item.raw),
         buyer: form.buyer.trim(), tel: form.tel.trim(), requiresDelivery: needsDelivery.value, date: form.date,
         deliverInfo: address ? { name: address.name, tel: address.phone, addr_id: address.id, addr: `${address.prov || ''}${address.city || ''}${address.area || ''}${address.addr || ''}` } : {},
-    } : { signKey: ticket.value.signKey, count: form.count, buyers: [...form.buyers] };
+    } : { executor: "api", signKey: ticket.value.signKey, count: form.count, buyers: [...form.buyers] };
+}
+
+function androidProblem(requireSchedule = true) {
+    if (!project.value || !screen.value || !ticket.value) return "请先选择活动、场次和票档";
+    if (screen.value.requiresSeat) return "当前 Android 执行器不支持选座场次";
+    if (!runtime.android.serial) return "请先在 Android 设备页选择已授权的真机";
+    if (!Number.isInteger(form.count) || form.count < 1 || form.count > maxCount.value || androidUsers.value.length !== form.count) return "请填写与购买张数一致的 App 观演人姓名";
+    if (![androidForm.keyword, androidForm.city, androidForm.date, androidForm.price].every(value => value.trim())) return "请核对并填写大麦 App 中的活动、城市、场次和票档原文";
+    if (!Number.isInteger(Number(androidForm.priceIndex)) || Number(androidForm.priceIndex) < 0) return "票档备用索引无效";
+    if (requireSchedule && form.scheduled && !timestamp(form.startAt)) return "请选择有效的预约时间（北京时间）";
+    return "";
 }
 
 async function start() {
@@ -248,14 +281,14 @@ async function start() {
         if (problem) { error.value = problem; return; }
     }
     const address = addresses.value.find(item => String(item.id) === form.address);
-    const problem = validateSelection({ platform: props.platform, project: project.value, screen: screen.value, ticket: ticket.value,
+    const problem = form.executor === "android" ? androidProblem() : validateSelection({ platform: props.platform, project: project.value, screen: screen.value, ticket: ticket.value,
         count: form.count, buyers: form.buyers, buyer: form.buyer, tel: form.tel, address, scheduled: form.scheduled, startAt: form.startAt });
     if (problem) { error.value = problem; Message.warning(problem); return; }
     if (loadedAccount !== JSON.stringify(account())) { error.value = "账号或代理设置已变化，请重新加载商品"; return; }
     const wechat = normalizeWechat(runtime.settings.wechat);
     starting.value = true; error.value = "";
     try {
-        if (!isBili) await damaiCredentials();
+        if (!isBili && form.executor !== "android") await damaiCredentials();
         if (runtime.settings.autoSync && (!runtime.clock || Date.now() - runtime.clock.sampledAt > 300_000)) await calibrate();
         const config = { account: account(), projectId: isBili ? Number(project.value.id) : project.value.id,
             screenId: isBili ? Number(screen.value.id) : screen.value.id,
@@ -264,7 +297,8 @@ async function start() {
             id: `${props.platform}-${crypto.randomUUID()}`, platform: props.platform,
             title: `${project.value.name} · ${screen.value.name} · ${ticket.value.name}`,
             startAt: form.scheduled ? timestamp(form.startAt) : 0, offsetMs: Number(form.offsetMs || 0),
-            maxAttempts: form.maxAttempts, intervalMs: form.intervalMs, config,
+            maxAttempts: form.executor === "android" ? 1 : form.maxAttempts,
+            intervalMs: form.executor === "android" ? 1000 : form.intervalMs, config,
         });
     } catch (value) { fail(value, "任务启动失败"); }
     finally { starting.value = false; }
@@ -309,7 +343,8 @@ async function start() {
                             <option v-for="item in accounts" :key="item.id" :value="item.id">{{ item.name }}{{ runtime.accounts.defaults[platform] === item.id ? '（默认）' : '' }}</option>
                         </select>
                         <small v-if="form.accountId && !selectedAccount" class="inline-error">所选账号已删除，请选择其他账号。</small>
-                        <div class="privacy-note"><UiIcon name="lock" />{{ selectedAccount ? '使用统一账号库中的 Cookie，过期后可在账号管理中更新。' : '在设置中保存一次 Cookie，购票和监控即可共用。' }}</div>
+                        <div class="field space-top"><label class="field-label" :for="`${platform}-executor`">购票执行方式</label><select :id="`${platform}-executor`" class="text-input" v-model="form.executor" :disabled="locked || loading"><option value="api">大麦 H5/API</option><option value="android">Android 真机 · UIAutomator2</option></select><small class="field-hint">仅 App 可购买的活动可选择 Android；活动信息仍使用已选账号加载。</small></div>
+                        <div class="privacy-note"><UiIcon name="lock" />{{ form.executor === 'android' ? 'Cookie 仅用于活动解析与余票查询；下单使用手机大麦 App 的现有登录态。' : selectedAccount ? '使用统一账号库中的 Cookie，过期后可在账号管理中更新。' : '在设置中保存一次 Cookie，购票和监控即可共用。' }}</div>
                         <label class="check-label proxy-row"><input type="checkbox" v-model="form.useProxy" :disabled="locked || loading" />使用全局代理 <router-link to="/settings">设置<UiIcon name="chevron" /></router-link></label>
                         <button class="button primary full" :disabled="locked || loading || !runtime.ready" type="submit"><UiIcon :name="loading ? 'refresh' : 'search'" :class="{ spinning: loading }" />{{ loading ? '正在加载活动…' : project ? '重新加载活动' : '加载活动' }}</button>
                     </form>
@@ -328,38 +363,47 @@ async function start() {
                         <div v-if="!isBili" class="section-rule"></div>
                         <div class="section-heading"><span class="section-icon"><UiIcon name="calendar" /></span><div><h2>选择场次与票档</h2><p v-if="!isBili">选择你想去的那一场</p></div><span class="tiny-label">02</span></div>
                         <div v-if="project.dates.length" class="field"><label class="field-label" :for="`${platform}-date`">活动日期</label><select :id="`${platform}-date`" class="text-input" v-model="form.date" @change="changeDate" :disabled="locked || ticketLoading"><option value="" disabled>选择日期</option><option v-for="date in project.dates" :value="date" :key="date">{{ date }}</option></select></div>
-                        <div class="field-label">场次</div><div class="option-grid"><button v-for="item in project.screens" :key="item.id" class="option-card" :class="{ chosen: screenId === item.id, unavailable: item.disabled }" :aria-pressed="screenId === item.id" :disabled="locked || ticketLoading || (!monitoring && item.disabled)" :title="item.disabledReason" @click="selectScreen(item)"><span>{{ item.name }}</span><small v-if="item.status">{{ item.status }}</small><UiIcon v-if="screenId === item.id" name="check" /></button></div>
+                        <div class="field-label">场次</div><div class="option-grid"><button v-for="item in project.screens" :key="item.id" class="option-card" :class="{ chosen: screenId === item.id, unavailable: item.disabled }" :aria-pressed="screenId === item.id" :disabled="locked || ticketLoading || (!monitoring && form.executor !== 'android' && item.disabled)" :title="item.disabledReason" @click="selectScreen(item)"><span>{{ item.name }}</span><small v-if="item.status">{{ item.status }}</small><UiIcon v-if="screenId === item.id" name="check" /></button></div>
                         <p v-if="!project.screens.length" class="field-hint">{{ project.dates.length ? '请选择活动日期以加载场次' : '暂无可选场次，请稍后重新加载' }}</p>
-                        <template v-if="screen"><div class="field-label space-top">票档 <span v-if="ticketLoading" class="muted-text">加载中…</span></div><div class="option-grid ticket-options"><button v-for="item in screen.tickets" :key="item.id" :aria-pressed="ticketId === item.id" class="option-card" :class="{ chosen: ticketId === item.id, unavailable: screen.disabled || item.disabled }" :disabled="locked || ticketLoading || (!monitoring && (screen.disabled || item.disabled))" :title="screen.disabledReason || item.disabledReason" @click="selectTicket(item)"><span>{{ item.name }}</span><strong>¥ {{ money(item.price) }}</strong><small v-if="item.status">{{ item.status }}</small><UiIcon v-if="ticketId === item.id" name="check" /></button></div><p v-if="!ticketLoading && !screen.tickets.length" class="field-hint">暂无票档，可以重新选择场次刷新。</p><p v-if="screen.deliveryFee" class="field-hint">以上价格已包含配送费 ¥{{ money(screen.deliveryFee) }} / 张。</p><p v-if="screen.requiresSeat" class="inline-error">该场次需要选座，请前往官方页面购票。</p></template>
+                        <template v-if="screen"><div class="field-label space-top">票档 <span v-if="ticketLoading" class="muted-text">加载中…</span></div><div class="option-grid ticket-options"><button v-for="item in screen.tickets" :key="item.id" :aria-pressed="ticketId === item.id" class="option-card" :class="{ chosen: ticketId === item.id, unavailable: screen.disabled || item.disabled }" :disabled="locked || ticketLoading || (!monitoring && form.executor !== 'android' && (screen.disabled || item.disabled))" :title="screen.disabledReason || item.disabledReason" @click="selectTicket(item)"><span>{{ item.name }}</span><strong>¥ {{ money(item.price) }}</strong><small v-if="item.status">{{ item.status }}</small><UiIcon v-if="ticketId === item.id" name="check" /></button></div><p v-if="!ticketLoading && !screen.tickets.length" class="field-hint">暂无票档，可以重新选择场次刷新。</p><p v-if="screen.deliveryFee" class="field-hint">以上价格已包含配送费 ¥{{ money(screen.deliveryFee) }} / 张。</p><p v-if="screen.requiresSeat" class="inline-error">该场次需要选座，请前往官方页面购票。</p></template>
+                    </section>
+                    <section v-if="!isBili && form.executor === 'android' && ticket && (!monitoring || autoPurchase)" class="panel purchase-panel">
+                        <div class="section-heading"><span class="section-icon"><UiIcon name="settings" /></span><div><h2>大麦 App 目标</h2><p>请按手机 App 页面原文核对以下字段</p></div></div>
+                        <p class="field-hint">当前设备：{{ runtime.android.serial || '未选择' }} · <router-link to="/android">连接与管理设备 →</router-link></p>
+                        <div class="two-fields space-top"><div class="field"><label class="field-label" for="android-keyword">搜索关键词</label><input id="android-keyword" class="text-input" v-model="androidForm.keyword" :disabled="locked" /></div><div class="field"><label class="field-label" for="android-city">城市原文</label><input id="android-city" class="text-input" v-model="androidForm.city" :disabled="locked" /></div></div>
+                        <div class="two-fields space-top"><div class="field"><label class="field-label" for="android-date">场次原文</label><input id="android-date" class="text-input" v-model="androidForm.date" :disabled="locked" /></div><div class="field"><label class="field-label" for="android-price">票档原文</label><input id="android-price" class="text-input" v-model="androidForm.price" :disabled="locked" /></div></div>
+                        <div class="two-fields space-top"><div class="field"><label class="field-label" for="android-title">活动标题匹配</label><input id="android-title" class="text-input" v-model="androidForm.targetTitle" :disabled="locked" /></div><div class="field"><label class="field-label" for="android-venue">场馆匹配</label><input id="android-venue" class="text-input" v-model="androidForm.targetVenue" :disabled="locked" /></div></div>
+                        <div class="two-fields space-top"><div class="field"><label class="field-label" for="android-users">App 观演人姓名（逗号或换行分隔）</label><textarea id="android-users" class="text-input" rows="2" v-model="androidForm.users" :disabled="locked" autocomplete="off" /></div><div class="field"><label class="field-label" for="android-price-index">票档备用索引</label><input id="android-price-index" class="text-input" type="number" min="0" max="100" v-model.number="androidForm.priceIndex" :disabled="locked" /><small class="field-hint">仅在 App 文本匹配失败时使用，从 0 开始。</small></div></div>
+                        <p class="field-hint">姓名仅保留在当前页面内存中，不写入表单草稿；请先在手机大麦 App 添加观演人并登录。</p>
                     </section>
                     <section v-if="monitoring && ticket" class="panel purchase-panel">
                         <div class="section-heading"><span class="section-icon"><UiIcon name="user" /></span><div><h2>有票后的操作</h2><p>可以只提醒，也可以使用已选账号自动创建订单</p></div></div>
                         <label class="check-label"><input type="checkbox" v-model="autoPurchase" :disabled="locked" />发现目标票档有票后自动购票</label>
                         <template v-if="autoPurchase">
                             <p class="field-hint space-top">下单前会重新核对场次、票档、价格与观演人。订单创建后仍需在官方页面人工付款。</p>
-                            <p v-if="screen?.requiresSeat" class="inline-error">当前 API 执行方式不支持选座场次。</p>
+                            <p v-if="screen?.requiresSeat" class="inline-error">当前执行方式不支持选座场次。</p>
                             <div class="purchase-row space-top"><label class="field-label" :for="`${platform}-monitor-count`">购买张数</label><input :id="`${platform}-monitor-count`" class="text-input" type="number" min="1" :max="maxCount" v-model.number="form.count" :disabled="locked" /></div>
-                            <div class="label-row"><span class="field-label">观演人 · 已选 {{ form.buyers.length }} / {{ form.count }} 位</span><button class="text-button" :disabled="buyerLoading || locked" @click="loadBuyers()">{{ buyerLoading ? '加载中' : '刷新观演人' }}</button></div>
-                            <div class="buyer-grid"><label v-for="item in buyers" :key="item.key" class="buyer-card" :class="{ chosen: form.buyers.includes(item.key) }"><input type="checkbox" :value="item.key" v-model="form.buyers" :disabled="locked || (!form.buyers.includes(item.key) && form.buyers.length >= form.count)" /><div><strong>{{ item.name }}</strong><small>{{ item.identity }}</small></div></label></div><p v-if="buyerError" class="inline-error" role="alert">{{ buyerError }}</p>
+                            <div v-if="form.executor !== 'android'" class="label-row"><span class="field-label">观演人 · 已选 {{ form.buyers.length }} / {{ form.count }} 位</span><button class="text-button" :disabled="buyerLoading || locked" @click="loadBuyers()">{{ buyerLoading ? '加载中' : '刷新观演人' }}</button></div>
+                            <div v-if="form.executor !== 'android'" class="buyer-grid"><label v-for="item in buyers" :key="item.key" class="buyer-card" :class="{ chosen: form.buyers.includes(item.key) }"><input type="checkbox" :value="item.key" v-model="form.buyers" :disabled="locked || (!form.buyers.includes(item.key) && form.buyers.length >= form.count)" /><div><strong>{{ item.name }}</strong><small>{{ item.identity }}</small></div></label></div><p v-if="form.executor !== 'android' && buyerError" class="inline-error" role="alert">{{ buyerError }}</p>
                             <div v-if="isBili" class="two-fields space-top"><div class="field"><label class="field-label" for="bili-monitor-contact">联系人</label><input id="bili-monitor-contact" class="text-input" v-model="form.buyer" :disabled="locked" /></div><div class="field"><label class="field-label" for="bili-monitor-tel">联系电话</label><input id="bili-monitor-tel" class="text-input" type="tel" v-model="form.tel" :disabled="locked" /></div></div>
                             <div v-if="needsDelivery" class="field space-top"><div class="label-row"><label class="field-label" for="bili-monitor-address">收货地址</label><button class="text-button" :disabled="addressLoading || locked" @click="loadAddresses()">刷新地址</button></div><select id="bili-monitor-address" class="text-input" v-model="form.address" :disabled="locked"><option value="">请选择收货地址</option><option v-for="item in addresses" :key="item.id" :value="String(item.id)">{{ item.name }} · {{ item.prov }}{{ item.city }}{{ item.area }}{{ item.addr }}</option></select><p v-if="addressError" class="inline-error">{{ addressError }}</p></div>
-                            <div class="two-fields space-top"><div class="field"><label class="field-label" :for="`${platform}-monitor-attempts`">单次购票最多尝试</label><input :id="`${platform}-monitor-attempts`" class="text-input" type="number" min="1" max="100" v-model.number="form.maxAttempts" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-monitor-retry`">购票重试间隔 / ms</label><input :id="`${platform}-monitor-retry`" class="text-input" type="number" min="300" max="60000" v-model.number="form.intervalMs" :disabled="locked" /></div></div>
+                            <div v-if="form.executor !== 'android'" class="two-fields space-top"><div class="field"><label class="field-label" :for="`${platform}-monitor-attempts`">单次购票最多尝试</label><input :id="`${platform}-monitor-attempts`" class="text-input" type="number" min="1" max="100" v-model.number="form.maxAttempts" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-monitor-retry`">购票重试间隔 / ms</label><input :id="`${platform}-monitor-retry`" class="text-input" type="number" min="300" max="60000" v-model.number="form.intervalMs" :disabled="locked" /></div></div>
                         </template>
                     </section>
-                    <MonitorControls v-if="monitoring" v-show="!isBili || ticket" :platform="platform" :locked="locked" :ready="!!ticket && !ticketLoading" :auto-purchase="autoPurchase" @start="startMonitor" />
+                    <MonitorControls v-if="monitoring" v-show="!isBili || ticket" :platform="platform" :locked="locked" :ready="!!ticket && !ticketLoading" :auto-purchase="autoPurchase" :executor="form.executor" @start="startMonitor" />
                     <section v-else v-show="!isBili || ticket" class="panel purchase-panel"><div class="section-heading"><span class="section-icon"><UiIcon name="user" /></span><div><h2>确认购票信息</h2><p v-if="!isBili">准备好，就出发</p></div><span class="tiny-label">03</span></div>
                         <div class="purchase-row"><label class="field-label" :for="`${platform}-count`">购买张数</label><div class="quantity-control"><button aria-label="减少张数" :disabled="locked || form.count <= 1" @click="form.count--">−</button><input :id="`${platform}-count`" type="number" min="1" :max="maxCount" v-model.number="form.count" :disabled="locked" /><button aria-label="增加张数" :disabled="locked || form.count >= maxCount" @click="form.count++">＋</button></div><small class="muted-text">最多 {{ maxCount }} 张</small></div>
-                        <div class="label-row"><span class="field-label">观演人 <span class="muted-text">已选 {{ form.buyers.length }} / {{ form.count }} 位</span></span><button class="text-button" :disabled="buyerLoading || locked" @click="loadBuyers()"><UiIcon name="refresh" :class="{ spinning: buyerLoading }" />{{ buyerLoading ? '加载中' : '刷新' }}</button></div>
-                        <div class="buyer-grid"><label v-for="item in buyers" :key="item.key" class="buyer-card" :class="{ chosen: form.buyers.includes(item.key) }"><input type="checkbox" :value="item.key" v-model="form.buyers" :disabled="locked || (!form.buyers.includes(item.key) && form.buyers.length >= form.count)" /><div><strong>{{ item.name }}</strong><small>{{ item.identity }}</small></div></label></div><p v-if="buyerError" class="inline-error" role="alert">{{ buyerError }}</p>
+                        <div v-if="form.executor !== 'android'" class="label-row"><span class="field-label">观演人 <span class="muted-text">已选 {{ form.buyers.length }} / {{ form.count }} 位</span></span><button class="text-button" :disabled="buyerLoading || locked" @click="loadBuyers()"><UiIcon name="refresh" :class="{ spinning: buyerLoading }" />{{ buyerLoading ? '加载中' : '刷新' }}</button></div>
+                        <div v-if="form.executor !== 'android'" class="buyer-grid"><label v-for="item in buyers" :key="item.key" class="buyer-card" :class="{ chosen: form.buyers.includes(item.key) }"><input type="checkbox" :value="item.key" v-model="form.buyers" :disabled="locked || (!form.buyers.includes(item.key) && form.buyers.length >= form.count)" /><div><strong>{{ item.name }}</strong><small>{{ item.identity }}</small></div></label></div><p v-if="form.executor !== 'android' && buyerError" class="inline-error" role="alert">{{ buyerError }}</p>
                         <div v-if="isBili" class="two-fields space-top"><div class="field"><label class="field-label" for="bili-contact">联系人</label><input id="bili-contact" class="text-input" v-model="form.buyer" :disabled="locked" placeholder="联系人姓名" /></div><div class="field"><label class="field-label" for="bili-tel">联系电话</label><input id="bili-tel" class="text-input" v-model="form.tel" :disabled="locked" type="tel" placeholder="接收订单通知的手机号" /></div></div>
                         <div v-if="needsDelivery" class="field space-top"><div class="label-row"><label class="field-label" for="bili-address">收货地址</label><button class="text-button" :disabled="addressLoading || locked" @click="loadAddresses()">刷新地址</button></div><select id="bili-address" v-model="form.address" :disabled="locked || addressLoading" class="text-input"><option value="">请选择收货地址</option><option v-for="address in addresses" :key="address.id" :value="String(address.id)">{{ address.name }} · {{ address.prov }}{{ address.city }}{{ address.area }}{{ address.addr }}</option></select><p v-if="addressError" class="inline-error">{{ addressError }}</p><small v-if="!addresses.length" class="field-hint">请先在会员购添加收货地址，再刷新列表。</small></div>
                         <div class="section-rule"></div>
                         <div class="label-row"><div class="compact-heading"><UiIcon name="clock" /><h3>预约与重试</h3></div><label class="check-label"><input type="checkbox" v-model="form.scheduled" :disabled="locked" />定时开始</label></div>
                         <div v-if="form.scheduled" class="field space-top"><label class="field-label" :for="`${platform}-start`">开始时间（北京时间）</label><input :id="`${platform}-start`" class="text-input" type="datetime-local" step="1" v-model="form.startAt" :disabled="locked" /><small class="field-hint">开售时间自动带入，也可以手动调整。</small></div>
-                        <div class="three-fields space-top"><div class="field"><label class="field-label" :for="`${platform}-attempts`">最多尝试 / 次</label><input :id="`${platform}-attempts`" class="text-input" type="number" v-model.number="form.maxAttempts" min="1" max="100" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-interval`">重试间隔 / ms</label><input :id="`${platform}-interval`" class="text-input" type="number" v-model.number="form.intervalMs" min="300" max="60000" step="100" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-offset`">修正时间 / ms</label><input :id="`${platform}-offset`" class="text-input" type="number" v-model.number="form.offsetMs" min="-86400000" max="86400000" :disabled="locked" /></div></div>
+                        <div class="three-fields space-top"><div v-if="form.executor !== 'android'" class="field"><label class="field-label" :for="`${platform}-attempts`">最多尝试 / 次</label><input :id="`${platform}-attempts`" class="text-input" type="number" v-model.number="form.maxAttempts" min="1" max="100" :disabled="locked" /></div><div v-if="form.executor !== 'android'" class="field"><label class="field-label" :for="`${platform}-interval`">重试间隔 / ms</label><input :id="`${platform}-interval`" class="text-input" type="number" v-model.number="form.intervalMs" min="300" max="60000" step="100" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-offset`">修正时间 / ms</label><input :id="`${platform}-offset`" class="text-input" type="number" v-model.number="form.offsetMs" min="-86400000" max="86400000" :disabled="locked" /></div></div>
                         <p class="field-hint">修正值 = 服务器时间 − 本机时间。任务开始后可切换平台，请保持电脑唤醒。</p>
                         <p class="field-hint">{{ runtime.settings.wechat.enabled ? '已启用微信提醒：订单创建成功后发送待支付通知。新任务使用启动时已保存的通知设置。' : '当前仅在应用内提醒。可在设置中启用微信购票与余票提醒。' }} <router-link to="/settings">通知设置 →</router-link></p>
-                        <div class="purchase-footer"><div><small>预计总额</small><strong><span>¥</span> {{ money((ticket?.price || 0) * form.count) }}</strong></div><button class="button primary" :disabled="locked || !ticket || screen?.disabled || ticket.disabled || !runtime.ready || ticketLoading" @click="start"><UiIcon :name="starting ? 'refresh' : 'play'" :class="{ spinning: starting }" />{{ starting ? '正在准备…' : running ? '任务进行中' : form.scheduled ? '创建预约任务' : '开始购票' }}</button></div><small class="field-hint">创建订单后请在官方页面及时支付。</small>
+                        <div class="purchase-footer"><div><small>预计总额</small><strong><span>¥</span> {{ money((ticket?.price || 0) * form.count) }}</strong></div><button class="button primary" :disabled="locked || !ticket || (form.executor !== 'android' && (screen?.disabled || ticket.disabled)) || !runtime.ready || ticketLoading" @click="start"><UiIcon :name="starting ? 'refresh' : 'play'" :class="{ spinning: starting }" />{{ starting ? '正在准备…' : running ? '任务进行中' : form.scheduled ? '创建预约任务' : '开始购票' }}</button></div><small class="field-hint">创建订单后请在官方页面及时支付。</small>
                     </section>
                 </template>
             </div>
