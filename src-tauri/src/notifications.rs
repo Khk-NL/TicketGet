@@ -17,7 +17,7 @@ use uuid::Uuid;
 const LOGIN_TTL: i64 = 5 * 60_000;
 const INITIAL_BASE: &str = "https://ilinkai.weixin.qq.com";
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WechatConfig {
     pub enabled: bool,

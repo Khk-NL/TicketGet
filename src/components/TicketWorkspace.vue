@@ -15,6 +15,7 @@ import { normalizeWechat } from "../services/monitoring";
 const props = defineProps({ platform: { type: String, required: true }, monitoring: Boolean });
 const emit = defineEmits(["created", "busy"]);
 const monitoring = computed(() => props.monitoring);
+const autoPurchase = ref(false);
 const meta = platforms[props.platform];
 const isBili = props.platform === "bilibili";
 const draftKey = `tickets.${props.monitoring ? "monitor-draft" : "draft"}.${props.platform}`;
@@ -72,6 +73,11 @@ watch(() => [form.url, selectedAccount.value?.id, selectedAccount.value?.cookie,
     error.value = ""; buyerError.value = ""; addressError.value = "";
 });
 watch(() => runtime.clock, sample => { if (sample && !locked.value) form.offsetMs = sample.offsetMs; });
+watch(autoPurchase, enabled => {
+    if (!enabled || !project.value) return;
+    loadBuyers();
+    if (isBili) loadAddresses();
+});
 
 function fail(value, title = "加载失败") {
     error.value = errorText(value);
@@ -195,19 +201,44 @@ async function startMonitor(options) {
         if (problem) { error.value = problem; return; }
     }
     if (loadedAccount !== JSON.stringify(account())) { error.value = "账号或代理设置已变化，请重新加载商品"; return; }
+    let purchase;
+    if (autoPurchase.value) {
+        const address = addresses.value.find(item => String(item.id) === form.address);
+        const problem = validateSelection({ platform: props.platform, project: project.value,
+            screen: { ...screen.value, disabled: false }, ticket: { ...ticket.value, disabled: false },
+            count: form.count, buyers: form.buyers, buyer: form.buyer, tel: form.tel, address,
+            scheduled: false, startAt: "" });
+        if (problem) { error.value = problem; Message.warning(problem); return; }
+        if (!Number.isInteger(form.maxAttempts) || form.maxAttempts < 1 || form.maxAttempts > 100
+            || !Number.isInteger(form.intervalMs) || form.intervalMs < 300 || form.intervalMs > 60000) {
+            error.value = "自动购票尝试次数或重试间隔无效"; return;
+        }
+        purchase = purchaseDetails(address);
+    }
     starting.value = true;
     try {
+        if (autoPurchase.value && !isBili) await damaiCredentials();
         const { endAt, wechat, ...timing } = options;
         const created = await startTask({
             id: `${props.platform}-${crypto.randomUUID()}`, mode: "monitor", platform: props.platform,
             title: `${project.value.name} · ${screen.value.name} · ${ticket.value.name}`,
             ...timing,
-            config: { account: account(), projectId: String(project.value.id), screenId: String(screen.value.id), skuId: String(ticket.value.id), date: form.date, endAt, wechat },
+            config: { account: account(), projectId: String(project.value.id), screenId: String(screen.value.id), skuId: String(ticket.value.id), date: form.date, endAt, wechat,
+                ...(purchase ? { purchase, purchaseMaxAttempts: form.maxAttempts, purchaseIntervalMs: form.intervalMs } : {}) },
         });
         Message.success("监控已添加，可以继续添加其他活动或票档");
         emit("created", created);
     } catch (value) { fail(value, "监控启动失败"); }
     finally { starting.value = false; }
+}
+
+function purchaseDetails(address) {
+    return isBili ? {
+        unitPrice: ticket.value.price, count: form.count,
+        buyers: buyers.value.filter(item => form.buyers.includes(item.key)).map(item => item.raw),
+        buyer: form.buyer.trim(), tel: form.tel.trim(), requiresDelivery: needsDelivery.value, date: form.date,
+        deliverInfo: address ? { name: address.name, tel: address.phone, addr_id: address.id, addr: `${address.prov || ''}${address.city || ''}${address.area || ''}${address.addr || ''}` } : {},
+    } : { signKey: ticket.value.signKey, count: form.count, buyers: [...form.buyers] };
 }
 
 async function start() {
@@ -226,13 +257,9 @@ async function start() {
     try {
         if (!isBili) await damaiCredentials();
         if (runtime.settings.autoSync && (!runtime.clock || Date.now() - runtime.clock.sampledAt > 300_000)) await calibrate();
-        const common = { account: account(), projectId: project.value.id, skuId: ticket.value.id, count: form.count, wechat };
-        const config = isBili ? {
-            ...common, projectId: Number(project.value.id), screenId: Number(screen.value.id), skuId: Number(ticket.value.id),
-            unitPrice: ticket.value.price, buyers: buyers.value.filter(item => form.buyers.includes(item.key)).map(item => item.raw),
-            buyer: form.buyer.trim(), tel: form.tel.trim(), requiresDelivery: needsDelivery.value, date: form.date,
-            deliverInfo: address ? { name: address.name, tel: address.phone, addr_id: address.id, addr: `${address.prov || ''}${address.city || ''}${address.area || ''}${address.addr || ''}` } : {},
-        } : { ...common, signKey: ticket.value.signKey, buyers: [...form.buyers] };
+        const config = { account: account(), projectId: isBili ? Number(project.value.id) : project.value.id,
+            screenId: isBili ? Number(screen.value.id) : screen.value.id,
+            skuId: isBili ? Number(ticket.value.id) : ticket.value.id, wechat, ...purchaseDetails(address) };
         await startTask({
             id: `${props.platform}-${crypto.randomUUID()}`, platform: props.platform,
             title: `${project.value.name} · ${screen.value.name} · ${ticket.value.name}`,
@@ -305,7 +332,21 @@ async function start() {
                         <p v-if="!project.screens.length" class="field-hint">{{ project.dates.length ? '请选择活动日期以加载场次' : '暂无可选场次，请稍后重新加载' }}</p>
                         <template v-if="screen"><div class="field-label space-top">票档 <span v-if="ticketLoading" class="muted-text">加载中…</span></div><div class="option-grid ticket-options"><button v-for="item in screen.tickets" :key="item.id" :aria-pressed="ticketId === item.id" class="option-card" :class="{ chosen: ticketId === item.id, unavailable: screen.disabled || item.disabled }" :disabled="locked || ticketLoading || (!monitoring && (screen.disabled || item.disabled))" :title="screen.disabledReason || item.disabledReason" @click="selectTicket(item)"><span>{{ item.name }}</span><strong>¥ {{ money(item.price) }}</strong><small v-if="item.status">{{ item.status }}</small><UiIcon v-if="ticketId === item.id" name="check" /></button></div><p v-if="!ticketLoading && !screen.tickets.length" class="field-hint">暂无票档，可以重新选择场次刷新。</p><p v-if="screen.deliveryFee" class="field-hint">以上价格已包含配送费 ¥{{ money(screen.deliveryFee) }} / 张。</p><p v-if="screen.requiresSeat" class="inline-error">该场次需要选座，请前往官方页面购票。</p></template>
                     </section>
-                    <MonitorControls v-if="monitoring" v-show="!isBili || ticket" :platform="platform" :locked="locked" :ready="!!ticket && !ticketLoading" @start="startMonitor" />
+                    <section v-if="monitoring && ticket" class="panel purchase-panel">
+                        <div class="section-heading"><span class="section-icon"><UiIcon name="user" /></span><div><h2>有票后的操作</h2><p>可以只提醒，也可以使用已选账号自动创建订单</p></div></div>
+                        <label class="check-label"><input type="checkbox" v-model="autoPurchase" :disabled="locked" />发现目标票档有票后自动购票</label>
+                        <template v-if="autoPurchase">
+                            <p class="field-hint space-top">下单前会重新核对场次、票档、价格与观演人。订单创建后仍需在官方页面人工付款。</p>
+                            <p v-if="screen?.requiresSeat" class="inline-error">当前 API 执行方式不支持选座场次。</p>
+                            <div class="purchase-row space-top"><label class="field-label" :for="`${platform}-monitor-count`">购买张数</label><input :id="`${platform}-monitor-count`" class="text-input" type="number" min="1" :max="maxCount" v-model.number="form.count" :disabled="locked" /></div>
+                            <div class="label-row"><span class="field-label">观演人 · 已选 {{ form.buyers.length }} / {{ form.count }} 位</span><button class="text-button" :disabled="buyerLoading || locked" @click="loadBuyers()">{{ buyerLoading ? '加载中' : '刷新观演人' }}</button></div>
+                            <div class="buyer-grid"><label v-for="item in buyers" :key="item.key" class="buyer-card" :class="{ chosen: form.buyers.includes(item.key) }"><input type="checkbox" :value="item.key" v-model="form.buyers" :disabled="locked || (!form.buyers.includes(item.key) && form.buyers.length >= form.count)" /><div><strong>{{ item.name }}</strong><small>{{ item.identity }}</small></div></label></div><p v-if="buyerError" class="inline-error" role="alert">{{ buyerError }}</p>
+                            <div v-if="isBili" class="two-fields space-top"><div class="field"><label class="field-label" for="bili-monitor-contact">联系人</label><input id="bili-monitor-contact" class="text-input" v-model="form.buyer" :disabled="locked" /></div><div class="field"><label class="field-label" for="bili-monitor-tel">联系电话</label><input id="bili-monitor-tel" class="text-input" type="tel" v-model="form.tel" :disabled="locked" /></div></div>
+                            <div v-if="needsDelivery" class="field space-top"><div class="label-row"><label class="field-label" for="bili-monitor-address">收货地址</label><button class="text-button" :disabled="addressLoading || locked" @click="loadAddresses()">刷新地址</button></div><select id="bili-monitor-address" class="text-input" v-model="form.address" :disabled="locked"><option value="">请选择收货地址</option><option v-for="item in addresses" :key="item.id" :value="String(item.id)">{{ item.name }} · {{ item.prov }}{{ item.city }}{{ item.area }}{{ item.addr }}</option></select><p v-if="addressError" class="inline-error">{{ addressError }}</p></div>
+                            <div class="two-fields space-top"><div class="field"><label class="field-label" :for="`${platform}-monitor-attempts`">单次购票最多尝试</label><input :id="`${platform}-monitor-attempts`" class="text-input" type="number" min="1" max="100" v-model.number="form.maxAttempts" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-monitor-retry`">购票重试间隔 / ms</label><input :id="`${platform}-monitor-retry`" class="text-input" type="number" min="300" max="60000" v-model.number="form.intervalMs" :disabled="locked" /></div></div>
+                        </template>
+                    </section>
+                    <MonitorControls v-if="monitoring" v-show="!isBili || ticket" :platform="platform" :locked="locked" :ready="!!ticket && !ticketLoading" :auto-purchase="autoPurchase" @start="startMonitor" />
                     <section v-else v-show="!isBili || ticket" class="panel purchase-panel"><div class="section-heading"><span class="section-icon"><UiIcon name="user" /></span><div><h2>确认购票信息</h2><p v-if="!isBili">准备好，就出发</p></div><span class="tiny-label">03</span></div>
                         <div class="purchase-row"><label class="field-label" :for="`${platform}-count`">购买张数</label><div class="quantity-control"><button aria-label="减少张数" :disabled="locked || form.count <= 1" @click="form.count--">−</button><input :id="`${platform}-count`" type="number" min="1" :max="maxCount" v-model.number="form.count" :disabled="locked" /><button aria-label="增加张数" :disabled="locked || form.count >= maxCount" @click="form.count++">＋</button></div><small class="muted-text">最多 {{ maxCount }} 张</small></div>
                         <div class="label-row"><span class="field-label">观演人 <span class="muted-text">已选 {{ form.buyers.length }} / {{ form.count }} 位</span></span><button class="text-button" :disabled="buyerLoading || locked" @click="loadBuyers()"><UiIcon name="refresh" :class="{ spinning: buyerLoading }" />{{ buyerLoading ? '加载中' : '刷新' }}</button></div>

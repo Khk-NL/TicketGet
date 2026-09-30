@@ -3,7 +3,7 @@ import { reactive, ref, watch } from "vue";
 import { runtime, readLocal, saveLocal, errorText } from "../services/runtime";
 import { monitorOptions, restoreMonitorForm } from "../services/monitoring";
 import UiIcon from "./common/UiIcon.vue";
-const props = defineProps({ platform: String, locked: Boolean, ready: Boolean });
+const props = defineProps({ platform: String, locked: Boolean, ready: Boolean, autoPurchase: Boolean });
 const emit = defineEmits(["start"]);
 const key = `tickets.monitor.${props.platform}`;
 const form = reactive(restoreMonitorForm(readLocal(key, {}), runtime.clock));
@@ -18,7 +18,7 @@ function start() {
 </script>
 <template>
     <section class="panel purchase-panel">
-        <div class="section-heading"><span class="section-icon"><UiIcon name="search" /></span><div><h2>余票监控</h2><p>首次发现所选票档可购时提醒并结束监控</p></div></div>
+        <div class="section-heading"><span class="section-icon"><UiIcon name="search" /></span><div><h2>余票监控</h2><p>{{ autoPurchase ? '发现目标票档有票后启动购票，失败时继续监控' : '首次发现所选票档可购时提醒并结束监控' }}</p></div></div>
         <div class="three-fields">
             <div class="field"><label class="field-label" :for="`${platform}-monitor-interval`">查询间隔 / 秒</label><input :id="`${platform}-monitor-interval`" class="text-input" type="number" min="5" max="3600" step="1" v-model.number="form.intervalSeconds" :disabled="locked" /></div>
             <div class="field"><label class="field-label" :for="`${platform}-monitor-checks`">最多查询 / 次</label><input :id="`${platform}-monitor-checks`" class="text-input" type="number" min="0" max="100000" v-model.number="form.maxChecks" :disabled="locked" /><small class="field-hint">0 表示持续查询，直到有票或手动停止。</small></div>
@@ -30,8 +30,8 @@ function start() {
         </div>
         <div class="section-rule"></div>
         <p class="field-hint">{{ runtime.settings.wechat.enabled ? '已启用微信 ClawBot 通知。启动时使用当前已保存的通知设置。' : '当前仅在应用内提醒。如需微信提醒，请先在设置中启用 ClawBot 通知。' }} <router-link to="/settings">通知设置 →</router-link></p>
-        <p class="field-hint">无需填写观演人。可监控售罄、未开售或需要选座的票档；有票后请前往官方页面购票。保持应用运行和电脑唤醒，重启后需重新启动监控。</p>
+        <p class="field-hint">{{ autoPurchase ? '已选择 API 自动购票。需要选座的场次暂不支持自动提交。' : '仅提醒模式无需观演人；可监控售罄、未开售或需要选座的票档。' }}保持应用运行和电脑唤醒，重启后需重新启动监控。</p>
         <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
-        <div class="purchase-footer"><span class="muted-text">{{ form.intervalSeconds }} 秒一次 · 首次有票即提醒</span><button class="button primary" :disabled="locked || !ready || !runtime.ready" @click="start"><UiIcon name="play" />{{ locked ? '任务进行中' : form.scheduled ? '预约余票监控' : '开始余票监控' }}</button></div>
+        <div class="purchase-footer"><span class="muted-text">{{ form.intervalSeconds }} 秒一次 · {{ autoPurchase ? '有票即尝试下单' : '首次有票即提醒' }}</span><button class="button primary" :disabled="locked || !ready || !runtime.ready" @click="start"><UiIcon name="play" />{{ locked ? '任务进行中' : form.scheduled ? '预约余票监控' : '开始余票监控' }}</button></div>
     </section>
 </template>

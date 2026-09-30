@@ -2,10 +2,10 @@ use crate::{
     bilibili, clock, dm,
     http::{self, first, string, Account},
     notifications::WechatConfig,
-    tasks::{Outcome, TaskContext},
+    tasks::{self, Outcome, TaskContext},
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{future::Future, time::Duration};
 
 #[derive(Deserialize)]
@@ -21,6 +21,28 @@ pub struct Config {
     pub end_at: i64,
     #[serde(default)]
     wechat: WechatConfig,
+    #[serde(default)]
+    purchase: Option<Value>,
+    #[serde(default)]
+    purchase_max_attempts: Option<u32>,
+    #[serde(default)]
+    purchase_interval_ms: Option<u64>,
+}
+
+fn purchase_config(config: &Config, platform: &str) -> Result<Option<Value>, String> {
+    let Some(mut purchase) = config.purchase.clone() else { return Ok(None) };
+    let data = purchase.as_object_mut().ok_or("自动购票参数无效")?;
+    data.insert("account".into(), serde_json::to_value(&config.account).map_err(|_| "账号参数无效")?);
+    data.insert("projectId".into(), if platform == "dm" { json!(config.project_id) } else { json!(config.project_id.parse::<i64>().map_err(|_| "项目编号无效")?) });
+    data.insert("skuId".into(), if platform == "dm" { json!(config.sku_id) } else { json!(config.sku_id.parse::<i64>().map_err(|_| "票档编号无效")?) });
+    data.insert("screenId".into(), if platform == "dm" { json!(config.screen_id) } else { json!(config.screen_id.parse::<i64>().map_err(|_| "场次编号无效")?) });
+    data.insert("wechat".into(), serde_json::to_value(&config.wechat).map_err(|_| "通知参数无效")?);
+    match platform {
+        "dm" => dm::validate(&purchase)?,
+        "bilibili" => bilibili::validate(&purchase)?,
+        _ => return Err("不支持的购票平台".into()),
+    }
+    Ok(Some(purchase))
 }
 
 pub fn validate(value: &Value, platform: &str) -> Result<(), String> {
@@ -50,7 +72,16 @@ pub fn validate(value: &Value, platform: &str) -> Result<(), String> {
     if platform == "dm" && http::cookie_value(&config.account.cookie, "_m_h5_tk").is_empty() {
         return Err("大麦 Cookie 缺少 _m_h5_tk，请重新获取".into());
     }
-    config.wechat.validate()
+    config.wechat.validate()?;
+    if config.purchase.is_some() {
+        let attempts = config.purchase_max_attempts.unwrap_or(3);
+        let interval = config.purchase_interval_ms.unwrap_or(1000);
+        if !(1..=100).contains(&attempts) || !(300..=60_000).contains(&interval) {
+            return Err("自动购票重试参数无效".into());
+        }
+        purchase_config(&config, platform)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq)]
@@ -312,6 +343,9 @@ pub fn project_url(platform: &str, project_id: &str) -> String {
 pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
     let config: Config =
         serde_json::from_value(context.request.config.clone()).map_err(|_| "监控配置不完整")?;
+    if let Some(purchase) = purchase_config(&config, &context.request.platform)? {
+        return run_auto(context, &config, purchase).await;
+    }
     let polling = poll(
         context.request.interval_ms,
         context.request.max_attempts,
@@ -351,10 +385,83 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
     })
 }
 
+async fn run_auto(context: &TaskContext, config: &Config, purchase: Value) -> Result<Outcome, String> {
+    let mut errors = 0u32;
+    let mut attempt = 0u32;
+    loop {
+        if config.end_at > 0 && clock::delay_ms(config.end_at, context.request.offset_ms, clock::now_ms()) == 0 {
+            break;
+        }
+        attempt = attempt.saturating_add(1);
+        let mut delay = context.request.interval_ms;
+        match query(config, &context.request.platform, context.request.offset_ms).await {
+            Ok(Availability::Available) => {
+                errors = 0;
+                context.report("running", "发现目标票档库存，正在启动购票任务", attempt, None);
+                match tasks::launch_linked_purchase(context, purchase.clone(), attempt).await {
+                    Ok(child) if child.status == "succeeded" => {
+                        return Ok(Outcome { status: "succeeded", message: "已创建待付款订单；自动监控和购票已停止".into(), order_url: child.order_url });
+                    }
+                    Ok(child) if child.status == "needs_action" || child.status == "cancelled" => {
+                        return Ok(Outcome { status: "needs_action", message: format!("自动购票需要人工确认：{}", child.message), order_url: child.order_url });
+                    }
+                    Ok(child) => context.report("running", format!("购票未成功：{}；继续监控", child.message), attempt, None),
+                    Err(error) if error.contains("已有运行中的购票任务") => {
+                        context.report("running", "该平台另有购票任务，等待下次库存查询", attempt, None);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(Availability::Unavailable) => {
+                errors = 0;
+                context.report("running", "暂无可购余票，继续监控", attempt, None);
+            }
+            Ok(Availability::Unknown) => {
+                errors = 0;
+                context.report("running", "票档状态未知，等待下一次查询", attempt, None);
+            }
+            Err(_) => {
+                errors += 1;
+                if errors >= 5 {
+                    return Err("连续 5 次查询失败，监控已停止；请检查网络、Cookie 和官方页面是否需要验证".into());
+                }
+                context.report("running", format!("查询失败（连续 {errors}/5 次），稍后重试"), attempt, None);
+                delay = delay.saturating_mul(1 << errors).min(300_000).max(delay);
+            }
+        }
+        if context.request.max_attempts > 0 && attempt >= context.request.max_attempts { break; }
+        if config.end_at > 0 {
+            let remaining = clock::delay_ms(config.end_at, context.request.offset_ms, clock::now_ms());
+            if remaining == 0 { break; }
+            delay = delay.min(remaining);
+        }
+        context.pause(delay).await;
+    }
+    Ok(Outcome { status: "completed", message: "监控已结束，未创建订单".into(), order_url: None })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn linked_purchase_uses_monitored_target_and_account() {
+        let value = json!({
+            "account": {"cookie": "_m_h5_tk=abc_123"},
+            "projectId": "10", "screenId": "20", "skuId": "30",
+            "purchase": {"signKey": "signed", "count": 1, "buyers": ["masked-id"]}
+        });
+        let config: Config = serde_json::from_value(value.clone()).unwrap();
+        let purchase = purchase_config(&config, "dm").unwrap().unwrap();
+        assert_eq!(purchase["projectId"], "10");
+        assert_eq!(purchase["skuId"], "30");
+        assert_eq!(purchase["account"]["cookie"], "_m_h5_tk=abc_123");
+        assert!(validate(&value, "dm").is_ok());
+        let mut invalid = value;
+        invalid["purchase"]["buyers"] = json!([]);
+        assert!(validate(&invalid, "dm").is_err());
+    }
 
     #[test]
     fn bili_requires_positive_evidence_and_honors_unavailable_states() {

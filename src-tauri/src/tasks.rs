@@ -61,6 +61,7 @@ impl TaskSnapshot {
 struct TaskEntry {
     snapshot: TaskSnapshot,
     cancel: watch::Sender<bool>,
+    updates: watch::Sender<TaskSnapshot>,
 }
 
 #[derive(Clone, Default)]
@@ -125,6 +126,7 @@ impl TaskContext {
             entry.snapshot.revision += 1;
             entry.snapshot.order_url = order_url;
             entry.snapshot.notification_status = notification_status.map(str::to_string);
+            entry.updates.send_replace(entry.snapshot.clone());
             entry.snapshot.clone()
         };
         let _ = self.app.emit_all("ticket-task", snapshot);
@@ -299,11 +301,13 @@ impl TaskManager {
                     return Err("同时运行的任务已达 100 个，请先停止部分任务".into());
                 }
             }
+            let (updates, _) = watch::channel(snapshot.clone());
             tasks.insert(
                 request.id.clone(),
                 TaskEntry {
                     snapshot: snapshot.clone(),
                     cancel,
+                    updates,
                 },
             );
         }
@@ -317,6 +321,11 @@ impl TaskManager {
             let _ = entry.cancel.send(true);
         }
         Ok(())
+    }
+
+    fn subscribe(&self, id: &str) -> Result<watch::Receiver<TaskSnapshot>, String> {
+        let tasks = self.tasks.lock().map_err(|_| "任务状态不可用")?;
+        Ok(tasks.get(id).ok_or("购票任务不存在")?.updates.subscribe())
     }
 }
 
@@ -404,8 +413,12 @@ where
 pub fn start_ticket_task(
     app: AppHandle,
     state: State<'_, TaskManager>,
-    mut request: TaskRequest,
+    request: TaskRequest,
 ) -> Result<TaskSnapshot, String> {
+    launch_task(app, state.inner().clone(), request)
+}
+
+fn launch_task(app: AppHandle, manager: TaskManager, mut request: TaskRequest) -> Result<TaskSnapshot, String> {
     pin_subscription_proxy(&mut request.config)?;
     validate(&request)?;
     if request.mode == "monitor" {
@@ -420,7 +433,6 @@ pub fn start_ticket_task(
         app.state::<crate::notifications::WechatManager>()
             .check(&config)?;
     }
-    let manager = state.inner().clone();
     let (snapshot, receiver) = manager.reserve(&request)?;
     tauri::async_runtime::spawn(async move {
         let context = TaskContext {
@@ -512,6 +524,33 @@ pub fn start_ticket_task(
         .await;
     });
     Ok(snapshot)
+}
+
+pub async fn launch_linked_purchase(
+    context: &TaskContext,
+    config: Value,
+    attempt: u32,
+) -> Result<TaskSnapshot, String> {
+    let request = TaskRequest {
+        mode: "purchase".into(),
+        id: format!("{}-purchase-{attempt}", context.request.id),
+        platform: context.request.platform.clone(),
+        title: context.request.title.clone(),
+        start_at: 0,
+        offset_ms: context.request.offset_ms,
+        max_attempts: context.request.config["purchaseMaxAttempts"].as_u64().unwrap_or(3) as u32,
+        interval_ms: context.request.config["purchaseIntervalMs"].as_u64().unwrap_or(1000),
+        config,
+    };
+    let started = launch_task(context.app.clone(), context.manager.clone(), request)?;
+    let mut updates = context.manager.subscribe(&started.id)?;
+    loop {
+        let snapshot = updates.borrow().clone();
+        if !snapshot.active() {
+            return Ok(snapshot);
+        }
+        updates.changed().await.map_err(|_| "购票任务状态已中断")?;
+    }
 }
 
 pub fn order_list_url(platform: &str) -> &'static str {

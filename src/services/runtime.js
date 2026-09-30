@@ -71,7 +71,7 @@ function acceptTask(task, notify = false) {
     saveLocal("tickets.tasks", taskList.value.slice(0, 50));
     if (notify) {
         record(task.platform, task.message, task.status);
-        if (!isActive(task) && previous?.status !== task.status) {
+        if (!isActive(task) && previous?.status !== task.status && !(task.mode === "monitor" && task.status === "succeeded")) {
             Notification[["succeeded", "found"].includes(task.status) ? "success" : task.status === "failed" ? "error" : "info"]({ title: statusLabels[task.status], content: task.message, duration: 7000 });
             if (["succeeded", "found"].includes(task.status) && runtime.settings.sound) new Audio(successAudio).play().catch(() => {});
         }
