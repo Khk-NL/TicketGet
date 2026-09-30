@@ -8,6 +8,10 @@
 
 大麦工作台可以选择 H5/API 或 Android 真机执行方式。Android 执行器参考 [HaTickets Mobile](https://github.com/currycan/HaTickets)，需要 Android 真机、大麦 App 已登录、已录入观演人、ADB 和 Python 3.10–3.13。在“Android 设备”页检查连接并安装独立 UIAutomator2 虚拟环境；App 专属活动可选择 Android 方式。Android 的场次、票档和观演人姓名须以手机 App 页面原文核对。Bilibili 继续使用现有 API 执行器。
 
+在“设置与帮助 → 账号与 Cookie”填写账号名称后，可以点击“浏览器登录并获取 Cookie”。应用打开独立的 Chrome 或 Edge 隐私会话；自行登录大麦并访问活动页后，点击“读取并保存”。已有账号可用同一按钮刷新。Cookie 仅存于本次浏览器会话及现有加密账号库，浏览器关闭后需重新登录；此功能只服务于 H5 查询与下单，不会将 H5 请求变成 App 请求。
+
+如果 App 专属活动无法从 H5 加载，在大麦购票工作台选择 Android 后点击“H5 无法加载？直接配置 App 任务”，按手机 App 原文填写活动、场次、票档和观演人。此任务不需要 H5 Cookie，只执行一轮 App 操作；现有余票监控仍依赖 H5 详情及票档接口，H5 完全不可解析时无法提供自动余票监控。Android 设备页可输入本机 ADB 地址连接 MuMu 等模拟器；是否能下单取决于官方 App 对该设备的实际处理结果。
+
 本地模拟和 CI 测试只覆盖状态转换、结果映射、前端构建及已有平台回归。真正的 App 页面识别、订单提交、付款入口和微信送达需要用实际设备、账号与活动分别验证；没有实测记录时不应视为已确认可用。上游同步方式和阶段验收见 [Ticket Core 方案](docs/ticket-core-plan.md) 与 [HaTickets 来源说明](src-tauri/resources/hatickets/UPSTREAM.md)。
 
 基于 **Tauri + Rust + Vue 3** 的多平台购票工作台，支持 **大麦 H5** 与 **Bilibili 会员购**。

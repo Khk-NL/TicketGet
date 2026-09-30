@@ -40,6 +40,7 @@ fn main() {
             tasks::provide_ticket_credentials,
             android::android_environment,
             android::setup_android_environment,
+            android::android_connect_local_device,
             secure_store::put_account_credential,
             secure_store::get_account_credential,
             secure_store::delete_account_credential,

@@ -91,6 +91,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target || '' }}
@@ -107,6 +110,8 @@ jobs:
         run: npm ci
       - name: Test frontend
         run: npm test
+      - name: Check bundled Android executor syntax
+        run: python -m compileall -q src-tauri/resources/hatickets/mobile src-tauri/resources/hatickets/shared
       - name: Test backend
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Build and upload installers

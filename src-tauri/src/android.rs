@@ -106,6 +106,15 @@ fn adb(preferred: &str) -> PathBuf {
     if preferred.trim().is_empty() { PathBuf::from("adb") } else { PathBuf::from(preferred.trim()) }
 }
 
+#[tauri::command]
+pub async fn android_connect_local_device(adb_path: String, address: String) -> Result<String, String> {
+    let (host, port) = address.trim().split_once(':').ok_or("请输入本机地址和端口，例如 127.0.0.1:7555")?;
+    if !matches!(host, "127.0.0.1" | "localhost") || port.parse::<u16>().ok().filter(|value| *value > 0).is_none() {
+        return Err("仅支持连接本机模拟器地址，例如 127.0.0.1:7555".into());
+    }
+    output(&adb(&adb_path), &["connect", address.trim()]).await
+}
+
 async fn output(program: &Path, args: &[&str]) -> Result<String, String> {
     let result = Command::new(program).args(args).output().await.map_err(|e| format!("无法启动 {}：{e}", program.display()))?;
     if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).chars().take(300).collect()); }

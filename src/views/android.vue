@@ -6,6 +6,8 @@ import { call, desktop, errorText, refreshAndroidEnvironment, runtime, saveAndro
 
 const checking = ref(false);
 const installing = ref(false);
+const connecting = ref(false);
+const localAddress = ref("127.0.0.1:7555");
 const error = ref("");
 const androidTasks = computed(() => taskList.value.filter(task => task.executor === "android"));
 async function refresh() {
@@ -25,6 +27,15 @@ async function install() {
     finally { installing.value = false; }
 }
 function save() { saveAndroidSettings(runtime.android); }
+async function connectLocal() {
+    connecting.value = true; error.value = "";
+    try {
+        const result = await call("android_connect_local_device", { adbPath: runtime.android.adbPath, address: localAddress.value });
+        Message.success(result);
+        await refresh();
+    } catch (value) { error.value = errorText(value); }
+    finally { connecting.value = false; }
+}
 onMounted(refresh);
 </script>
 
@@ -39,6 +50,8 @@ onMounted(refresh);
             <button class="button secondary small" :disabled="installing || !desktop" @click="install">{{ installing ? '正在安装…' : '安装或修复 UIAutomator2 环境' }}</button>
         </section>
         <section class="panel space-top"><div class="section-heading"><div><h2>已连接设备</h2><p>只有状态为 device 的设备可以执行购票；请先在手机上授权 USB 调试。</p></div></div>
+            <div class="browser-login"><label class="field-label" for="local-adb-address">本机模拟器 ADB 地址</label><input id="local-adb-address" class="text-input" v-model="localAddress" placeholder="127.0.0.1:7555" /><button class="button secondary small" :disabled="connecting || !desktop" @click="connectLocal">{{ connecting ? '连接中…' : '连接模拟器' }}</button></div>
+            <p class="field-hint">可连接 MuMu 等提供本机 ADB 端口的模拟器。端口以模拟器设置为准；正式购票须在所选设备上自行验证官方 App 是否允许提交订单。</p>
             <div v-if="runtime.android.environment?.devices?.length" class="device-list"><label v-for="device in runtime.android.environment.devices" :key="device.serial" class="buyer-card"><input type="radio" name="android-device" :value="device.serial" v-model="runtime.android.serial" :disabled="device.state !== 'device'" @change="save" /><div><strong>{{ device.serial }}</strong><small>{{ device.state }} · {{ device.detail }}</small></div></label></div>
             <p v-else class="field-hint">尚未发现设备。连接手机后点击“刷新状态”。</p>
         </section>
@@ -55,6 +68,8 @@ onMounted(refresh);
 .status-good { color: var(--success); }
 .status-bad { color: var(--danger); }
 .device-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.browser-login { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+.browser-login .text-input { max-width: 220px; }
 .android-runs { display: grid; gap: 16px; }
 .android-runs pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--surface-alt, #f6f7f8); border-radius: 8px; font-size: 11px; }
 </style>
