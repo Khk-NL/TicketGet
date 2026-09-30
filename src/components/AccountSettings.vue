@@ -1,7 +1,7 @@
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { runtime, saveAccount, deleteAccount, setDefaultAccount, reloadAccounts, errorText } from "../services/runtime";
+import { call, desktop, runtime, saveAccount, deleteAccount, setDefaultAccount, reloadAccounts, errorText } from "../services/runtime";
 import { platforms, formatTime } from "../services/platforms";
 import UiIcon from "./common/UiIcon.vue";
 
@@ -10,6 +10,35 @@ const accounts = computed(() => runtime.accounts.items.filter(item => item.platf
 const form = reactive({ id: "", name: "", cookie: "" });
 const showCookie = ref(false);
 const error = ref("");
+const loginOpen = ref(false);
+const loginBusy = ref(false);
+async function browserLogin() {
+    error.value = "";
+    if (!form.name.trim()) { error.value = "请先填写账号名称"; return; }
+    loginBusy.value = true;
+    try { await call("start_damai_browser_login"); loginOpen.value = true; }
+    catch (value) { error.value = errorText(value); }
+    finally { loginBusy.value = false; }
+}
+async function captureCookie() {
+    error.value = "";
+    loginBusy.value = true;
+    try {
+        const cookie = await call("read_damai_browser_cookie");
+        loginOpen.value = false;
+        await saveAccount({ id: form.id, name: form.name, platform: "dm", cookie });
+        reset();
+        Message.success("大麦 Cookie 已读取并安全保存");
+    } catch (value) { error.value = errorText(value); }
+    finally { loginBusy.value = false; }
+}
+async function cancelLogin() {
+    loginBusy.value = true;
+    try { await call("cancel_damai_browser_login"); loginOpen.value = false; }
+    catch (value) { error.value = errorText(value); }
+    finally { loginBusy.value = false; }
+}
+onBeforeUnmount(() => { if (loginOpen.value) call("cancel_damai_browser_login").catch(() => {}); });
 function reset() { Object.assign(form, { id: "", name: "", cookie: "" }); showCookie.value = false; error.value = ""; }
 function selectPlatform(id) { platform.value = id; reset(); }
 function edit(account) { Object.assign(form, { id: account.id, name: account.name, cookie: account.cookie }); showCookie.value = false; error.value = ""; }
@@ -44,9 +73,13 @@ function makeDefault(id) {
         <form @submit.prevent="save">
             <div class="label-row"><h3>{{ form.id ? '更新账号' : '添加账号' }}</h3><button v-if="form.id" type="button" class="text-button" @click="reset">取消编辑</button></div>
             <div class="field space-top"><label class="field-label" for="account-name">账号名称</label><input id="account-name" class="text-input" v-model="form.name" maxlength="60" placeholder="例如：我的常用账号" autocomplete="off" /></div>
+            <div v-if="platform === 'dm' && desktop" class="browser-login space-top">
+                <button v-if="!loginOpen" class="button small" type="button" :disabled="loginBusy" @click="browserLogin">{{ form.id ? '浏览器刷新 Cookie' : '浏览器登录并获取 Cookie' }}</button>
+                <template v-else><span class="field-hint">请在打开的 Chrome 或 Edge 中登录大麦并访问活动页。</span><button class="button small" type="button" :disabled="loginBusy" @click="captureCookie">读取并保存</button><button class="text-button" type="button" :disabled="loginBusy" @click="cancelLogin">取消</button></template>
+            </div>
             <div class="label-row space-top"><label class="field-label" for="account-cookie">账号 Cookie</label><button type="button" class="text-button" @click="showCookie = !showCookie">{{ showCookie ? '隐藏' : '显示' }}</button></div>
             <textarea id="account-cookie" class="text-input cookie-input" :class="{ concealed: !showCookie }" rows="4" v-model="form.cookie" placeholder="粘贴已登录账号的完整 Cookie" autocomplete="off" spellcheck="false"></textarea>
-            <p class="field-hint">Cookie 使用系统凭据存储保护的密钥加密保存在当前设备。账号单独保存，无需再点击页面顶部的保存设置。保存只检查格式，登录是否有效以平台查询结果为准。</p>
+            <p class="field-hint">大麦可在浏览器中自行登录后点击“读取并保存”，无需打开开发者工具。Cookie 使用系统凭据存储保护的密钥加密保存在当前设备。保存只检查格式，登录是否有效以平台查询结果为准。</p>
             <p class="field-hint">更新或删除账号后，已启动的任务继续使用启动时的 Cookie；新查询和新任务使用当前账号。Cookie 过期时，在这里更新一次即可。</p>
             <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
             <button class="button primary small space-top" type="submit" :disabled="!!runtime.accountError">{{ form.id ? '保存更新' : '保存账号' }}<UiIcon name="check" /></button>
@@ -63,5 +96,6 @@ function makeDefault(id) {
 .account-description .pill { margin-left: 8px; }
 .account-description small { display: block; color: var(--muted); font-size: 10px; line-height: 1.7; margin-top: 6px; }
 .account-actions { display: flex; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
+.browser-login { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 @media (max-width: 700px) { .account-row { align-items: flex-start; flex-direction: column; } }
 </style>

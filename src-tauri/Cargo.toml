@@ -22,6 +22,8 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 uuid = { version = "1.3", features = ["v4"] }
 reqwest = { version = "0.11", features = ["json", "multipart", "socks"] }
 tokio = { version = "1", features = ["full"] }
+chromiumoxide = "0.9.1"
+futures = "0.3"
 regex = "1.8.4"
 md5 = "0.7"
 subscription-proxy-pool = "0.1.0"

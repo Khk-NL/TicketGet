@@ -1,11 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Manager;
-use tickets::{android, bilibili, clock, dm, notifications, secure_store, subscriptions, tasks, utils, version};
+use tickets::{android, bilibili, browser_login, clock, dm, notifications, secure_store, subscriptions, tasks, utils, version};
 
 fn main() {
     tauri::Builder::default()
         .manage(tasks::TaskManager::default())
+        .manage(browser_login::LoginManager::default())
         .setup(|app| {
             let directory = app
                 .path_resolver()
@@ -42,6 +43,9 @@ fn main() {
             secure_store::put_account_credential,
             secure_store::get_account_credential,
             secure_store::delete_account_credential,
+            browser_login::start_damai_browser_login,
+            browser_login::read_damai_browser_cookie,
+            browser_login::cancel_damai_browser_login,
             clock::sync_clock,
             subscriptions::refresh_subscription,
             subscriptions::remove_subscription,
