@@ -1,7 +1,7 @@
 use aes_gcm::{aead::{Aead, AeadCore, OsRng}, Aes256Gcm, KeyInit, Nonce};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{fs, io::Write, path::Path};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 const HEADER: &[u8] = b"TICKETGET1";
@@ -58,7 +58,7 @@ fn write_secure(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let mut file = options.open(&temp).map_err(|_| "无法创建凭据文件")?;
         file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|_| "凭据写入失败")?;
         drop(file);
-        fs::rename(&temp, path).map_err(|_| "凭据保存失败，原数据已保留")
+        fs::rename(&temp, path).map_err(|_| "凭据保存失败，原数据已保留".to_string())
     })();
     if result.is_err() { let _ = fs::remove_file(&temp); }
     result

@@ -48,7 +48,7 @@ export function resolveAccount(state, platform, id = "") {
 }
 
 export function accountMetadata(state) {
-    return { defaults: state.defaults, items: state.items.map(({ cookie, ...item }) => item) };
+    return { defaults: state.defaults, items: state.items.map(({ id, platform, name, updatedAt }) => ({ id, platform, name, updatedAt })) };
 }
 
 export function loadAccounts(storage) {

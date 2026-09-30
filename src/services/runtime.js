@@ -133,13 +133,29 @@ function persistAccounts(state) {
 export async function saveAccount(input) {
     const state = upsertAccount(runtime.accounts, input);
     const account = state.items.find(item => item.id === (input.id || state.items.at(-1).id));
+    const previous = runtime.accounts.items.find(item => item.id === account.id);
     await call("put_account_credential", { id: account.id, cookie: account.cookie });
-    persistAccounts(state);
+    try { persistAccounts(state); }
+    catch (error) {
+        try {
+            if (previous) await call("put_account_credential", { id: account.id, cookie: previous.cookie });
+            else await call("delete_account_credential", { id: account.id });
+        } catch { throw new Error("账号元数据保存失败，凭据回滚也失败；请重新读取并核对账号"); }
+        throw error;
+    }
     record("system", "账号凭证已保存", "success");
 }
 export async function deleteAccount(id) {
-    persistAccounts(removeAccount(runtime.accounts, id));
+    const previous = runtime.accounts.items.find(item => item.id === id);
     await call("delete_account_credential", { id });
+    try { persistAccounts(removeAccount(runtime.accounts, id)); }
+    catch (error) {
+        if (previous) {
+            try { await call("put_account_credential", { id, cookie: previous.cookie }); }
+            catch { throw new Error("账号元数据保存失败，凭据回滚也失败；请重新读取并核对账号"); }
+        }
+        throw error;
+    }
     record("system", "账号凭证已删除", "info");
 }
 export function setDefaultAccount(id) { persistAccounts(defaultAccount(runtime.accounts, id)); }
