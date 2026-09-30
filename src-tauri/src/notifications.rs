@@ -620,6 +620,13 @@ impl WechatManager {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err("微信绑定无法删除，解绑尚未生效，请检查本机存储权限".into()),
             }
+            if self.inner.path.extension().is_some_and(|extension| extension == "enc") {
+                match fs::remove_file(self.inner.path.with_extension("json")) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err("旧版微信绑定无法删除，请检查本机存储权限".into()),
+                }
+            }
             if let Some(stop) = state.stop.take() {
                 let _ = stop.send(true);
             }
