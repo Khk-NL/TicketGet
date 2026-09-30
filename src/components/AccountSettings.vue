@@ -60,19 +60,19 @@ function makeDefault(id) {
 <template>
     <section id="account-settings" class="panel settings-panel account-settings">
         <div class="section-heading"><span class="section-icon"><UiIcon name="user" /></span><div><h2>账号与 Cookie</h2><p>保存一次，购票和多个监控共用</p></div></div>
-        <div class="segmented-control" aria-label="管理账号平台"><button v-for="(meta, id) in platforms" :key="id" :class="{ selected: platform === id }" :aria-pressed="platform === id" @click="selectPlatform(id)">{{ meta.name }}</button></div>
+        <div class="segmented-control" aria-label="管理账号平台"><button v-for="(meta, id) in platforms" :key="id" :class="{ selected: platform === id }" :aria-pressed="platform === id" :disabled="loginOpen" @click="selectPlatform(id)">{{ meta.name }}</button></div>
         <div v-if="runtime.accountError" class="notice error" role="alert"><span>{{ runtime.accountError }}</span><button class="text-button" @click="reloadAccounts">重新读取</button></div>
         <div class="account-list">
             <article v-for="account in accounts" :key="account.id" class="account-row">
                 <div class="account-description"><strong>{{ account.name }}</strong><span v-if="runtime.accounts.defaults[platform] === account.id" class="pill">默认</span><small>Cookie 已保存 · {{ formatTime(account.updatedAt) }}</small></div>
-                <div class="account-actions"><button v-if="runtime.accounts.defaults[platform] !== account.id" class="text-button" @click="makeDefault(account.id)">设为默认</button><button class="text-button" @click="edit(account)">编辑</button><button class="text-button" @click="remove(account.id)">删除</button></div>
+                <div class="account-actions"><button v-if="runtime.accounts.defaults[platform] !== account.id" class="text-button" :disabled="loginOpen" @click="makeDefault(account.id)">设为默认</button><button class="text-button" :disabled="loginOpen" @click="edit(account)">编辑</button><button class="text-button" :disabled="loginOpen" @click="remove(account.id)">删除</button></div>
             </article>
             <p v-if="!accounts.length" class="field-hint">尚无{{ platforms[platform].name }}账号，在下方保存 Cookie 后即可使用。</p>
         </div>
         <div class="section-rule"></div>
         <form @submit.prevent="save">
-            <div class="label-row"><h3>{{ form.id ? '更新账号' : '添加账号' }}</h3><button v-if="form.id" type="button" class="text-button" @click="reset">取消编辑</button></div>
-            <div class="field space-top"><label class="field-label" for="account-name">账号名称</label><input id="account-name" class="text-input" v-model="form.name" maxlength="60" placeholder="例如：我的常用账号" autocomplete="off" /></div>
+            <div class="label-row"><h3>{{ form.id ? '更新账号' : '添加账号' }}</h3><button v-if="form.id" type="button" class="text-button" :disabled="loginOpen" @click="reset">取消编辑</button></div>
+            <div class="field space-top"><label class="field-label" for="account-name">账号名称</label><input id="account-name" class="text-input" v-model="form.name" maxlength="60" placeholder="例如：我的常用账号" autocomplete="off" :disabled="loginOpen" /></div>
             <div v-if="platform === 'dm' && desktop" class="browser-login space-top">
                 <button v-if="!loginOpen" class="button small" type="button" :disabled="loginBusy" @click="browserLogin">{{ form.id ? '浏览器刷新 Cookie' : '浏览器登录并获取 Cookie' }}</button>
                 <template v-else><span class="field-hint">请在打开的 Chrome 或 Edge 中登录大麦并访问活动页。</span><button class="button small" type="button" :disabled="loginBusy" @click="captureCookie">读取并保存</button><button class="text-button" type="button" :disabled="loginBusy" @click="cancelLogin">取消</button></template>
@@ -82,7 +82,7 @@ function makeDefault(id) {
             <p class="field-hint">大麦可在浏览器中自行登录后点击“读取并保存”，无需打开开发者工具。Cookie 使用系统凭据存储保护的密钥加密保存在当前设备。保存只检查格式，登录是否有效以平台查询结果为准。</p>
             <p class="field-hint">更新或删除账号后，已启动的任务继续使用启动时的 Cookie；新查询和新任务使用当前账号。Cookie 过期时，在这里更新一次即可。</p>
             <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
-            <button class="button primary small space-top" type="submit" :disabled="!!runtime.accountError">{{ form.id ? '保存更新' : '保存账号' }}<UiIcon name="check" /></button>
+            <button class="button primary small space-top" type="submit" :disabled="!!runtime.accountError || loginOpen">{{ form.id ? '保存更新' : '保存账号' }}<UiIcon name="check" /></button>
         </form>
     </section>
 </template>
