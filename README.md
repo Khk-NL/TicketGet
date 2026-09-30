@@ -33,7 +33,7 @@
 
 ## 下载
 
-前往 [Releases](https://github.com/shiyutim/tickets/releases) 选择对应系统的安装包。新功能以当前源码为准，已发布安装包可能尚未包含。
+前往 [TicketGet Releases](https://github.com/Khk-NL/TicketGet/releases) 查看对应系统的安装包。新功能以当前源码为准，已发布安装包可能尚未包含。
 
 ## 本地运行
 
