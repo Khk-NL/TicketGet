@@ -16,6 +16,7 @@ const props = defineProps({ platform: { type: String, required: true }, monitori
 const emit = defineEmits(["created", "busy"]);
 const monitoring = computed(() => props.monitoring);
 const autoPurchase = ref(false);
+const directAppMode = ref(false);
 const meta = platforms[props.platform];
 const isBili = props.platform === "bilibili";
 const draftKey = `tickets.${props.monitoring ? "monitor-draft" : "draft"}.${props.platform}`;
@@ -75,6 +76,7 @@ watch(() => [form.url, form.executor, selectedAccount.value?.id, selectedAccount
     error.value = ""; buyerError.value = ""; addressError.value = "";
 });
 watch(() => runtime.clock, sample => { if (sample && !locked.value) form.offsetMs = sample.offsetMs; });
+watch(() => form.executor, executor => { if (executor !== "android") directAppMode.value = false; });
 watch(autoPurchase, enabled => {
     if (!enabled || !project.value || form.executor === "android") return;
     loadBuyers();
@@ -263,15 +265,34 @@ function purchaseDetails(address) {
     } : { executor: "api", signKey: ticket.value.signKey, count: form.count, buyers: [...form.buyers] };
 }
 
-function androidProblem(requireSchedule = true) {
-    if (!project.value || !screen.value || !ticket.value) return "请先选择活动、场次和票档";
-    if (screen.value.requiresSeat) return "当前 Android 执行器不支持选座场次";
+function androidProblem(requireSchedule = true, requireProject = true) {
+    if (requireProject && (!project.value || !screen.value || !ticket.value)) return "请先选择活动、场次和票档";
+    if (requireProject && screen.value.requiresSeat) return "当前 Android 执行器不支持选座场次";
     if (!runtime.android.serial) return "请先在 Android 设备页选择已授权的真机";
-    if (!Number.isInteger(form.count) || form.count < 1 || form.count > maxCount.value || androidUsers.value.length !== form.count) return "请填写与购买张数一致的 App 观演人姓名";
+    if (!Number.isInteger(form.count) || form.count < 1 || form.count > (requireProject ? maxCount.value : 20) || androidUsers.value.length !== form.count) return "请填写与购买张数一致的 App 观演人姓名";
     if (![androidForm.keyword, androidForm.city, androidForm.date, androidForm.price].every(value => value.trim())) return "请核对并填写大麦 App 中的活动、城市、场次和票档原文";
     if (!Number.isInteger(Number(androidForm.priceIndex)) || Number(androidForm.priceIndex) < 0) return "票档备用索引无效";
     if (requireSchedule && form.scheduled && !timestamp(form.startAt)) return "请选择有效的预约时间（北京时间）";
     return "";
+}
+
+async function startDirectApp() {
+    if (locked.value) return;
+    const problem = androidProblem(true, false);
+    if (problem) { error.value = problem; Message.warning(problem); return; }
+    starting.value = true; error.value = "";
+    try {
+        if (runtime.settings.autoSync && (!runtime.clock || Date.now() - runtime.clock.sampledAt > 300_000)) await calibrate();
+        await startTask({
+            id: `dm-${crypto.randomUUID()}`, platform: "dm",
+            title: `${androidForm.targetTitle.trim() || androidForm.keyword.trim()} · ${androidForm.date.trim()} · ${androidForm.price.trim()}`,
+            startAt: form.scheduled ? timestamp(form.startAt) : 0, offsetMs: Number(form.offsetMs || 0),
+            maxAttempts: 1, intervalMs: 1000,
+            config: { account: { cookie: "" }, projectId: id.value || "", screenId: "", skuId: "",
+                wechat: normalizeWechat(runtime.settings.wechat), ...purchaseDetails() },
+        });
+    } catch (value) { fail(value, "Android 任务启动失败"); }
+    finally { starting.value = false; }
 }
 
 async function start() {
@@ -334,19 +355,20 @@ async function start() {
                         <p v-if="clockError" class="inline-error" role="alert">{{ clockError }}</p>
                     </template>
                     <form v-else @submit.prevent="loadProject" class="stack-form">
-                        <label class="field-label" :for="`${platform}-url`">活动链接或编号 <span>*</span></label>
+                        <label class="field-label" :for="`${platform}-url`">活动链接或编号 <span v-if="!directAppMode">*</span></label>
                         <input :id="`${platform}-url`" v-model="form.url" :disabled="locked || loading" class="text-input" :placeholder="isBili ? '粘贴会员购链接或项目 ID' : '粘贴大麦链接或 itemId'" autocomplete="off" />
                         <small class="field-hint" :class="{ 'accent-text': id }">{{ id ? `已识别项目 ${id}` : '自动识别官方商品链接中的项目编号' }}</small>
-                        <div class="label-row"><label class="field-label" :for="`${platform}-account`">使用账号 <span>*</span></label><router-link to="/settings" class="text-button">管理账号</router-link></div>
-                        <select :id="`${platform}-account`" class="text-input" :value="selectedAccount?.id || ''" @change="form.accountId = $event.target.value" :disabled="locked || loading || ticketLoading">
+                        <div v-if="!directAppMode" class="label-row"><label class="field-label" :for="`${platform}-account`">使用账号 <span>*</span></label><router-link to="/settings" class="text-button">管理账号</router-link></div>
+                        <select v-if="!directAppMode" :id="`${platform}-account`" class="text-input" :value="selectedAccount?.id || ''" @change="form.accountId = $event.target.value" :disabled="locked || loading || ticketLoading">
                             <option value="" disabled>{{ accounts.length ? '请选择账号' : '请先添加账号' }}</option>
                             <option v-for="item in accounts" :key="item.id" :value="item.id">{{ item.name }}{{ runtime.accounts.defaults[platform] === item.id ? '（默认）' : '' }}</option>
                         </select>
                         <small v-if="form.accountId && !selectedAccount" class="inline-error">所选账号已删除，请选择其他账号。</small>
-                        <div class="field space-top"><label class="field-label" :for="`${platform}-executor`">购票执行方式</label><select :id="`${platform}-executor`" class="text-input" v-model="form.executor" :disabled="locked || loading"><option value="api">大麦 H5/API</option><option value="android">Android 真机 · UIAutomator2</option></select><small class="field-hint">仅 App 可购买的活动可选择 Android；活动信息仍使用已选账号加载。</small></div>
-                        <div class="privacy-note"><UiIcon name="lock" />{{ form.executor === 'android' ? 'Cookie 仅用于活动解析与余票查询；下单使用手机大麦 App 的现有登录态。' : selectedAccount ? '使用统一账号库中的 Cookie，过期后可在账号管理中更新。' : '在设置中保存一次 Cookie，购票和监控即可共用。' }}</div>
-                        <label class="check-label proxy-row"><input type="checkbox" v-model="form.useProxy" :disabled="locked || loading" />使用全局代理 <router-link to="/settings">设置<UiIcon name="chevron" /></router-link></label>
-                        <button class="button primary full" :disabled="locked || loading || !runtime.ready" type="submit"><UiIcon :name="loading ? 'refresh' : 'search'" :class="{ spinning: loading }" />{{ loading ? '正在加载活动…' : project ? '重新加载活动' : '加载活动' }}</button>
+                        <div class="field space-top"><label class="field-label" :for="`${platform}-executor`">购票执行方式</label><select :id="`${platform}-executor`" class="text-input" v-model="form.executor" :disabled="locked || loading"><option value="api">大麦 H5/API</option><option value="android">Android 真机 · UIAutomator2</option></select><small class="field-hint">Android 使用手机大麦 App 的登录态。H5 无法解析的 App 专用活动可手动配置。</small></div>
+                        <button v-if="!monitoring && form.executor === 'android'" type="button" class="text-button" :disabled="locked" @click="directAppMode = !directAppMode">{{ directAppMode ? '返回活动解析' : 'H5 无法加载？直接配置 App 任务' }}</button>
+                        <div class="privacy-note"><UiIcon name="lock" />{{ directAppMode ? '直接使用手机大麦 App 登录态，不读取或发送 H5 Cookie。' : form.executor === 'android' ? 'Cookie 仅用于活动解析与余票查询；下单使用手机大麦 App 的现有登录态。' : selectedAccount ? '使用统一账号库中的 Cookie，过期后可在账号管理中更新。' : '在设置中保存一次 Cookie，购票和监控即可共用。' }}</div>
+                        <label v-if="!directAppMode" class="check-label proxy-row"><input type="checkbox" v-model="form.useProxy" :disabled="locked || loading" />使用全局代理 <router-link to="/settings">设置<UiIcon name="chevron" /></router-link></label>
+                        <button v-if="!directAppMode" class="button primary full" :disabled="locked || loading || !runtime.ready" type="submit"><UiIcon :name="loading ? 'refresh' : 'search'" :class="{ spinning: loading }" />{{ loading ? '正在加载活动…' : project ? '重新加载活动' : '加载活动' }}</button>
                     </form>
                     <button v-if="!isBili" class="connection-help text-button" @click="openExternal(meta.home)">打开大麦官网<UiIcon name="launch" /></button>
                 </section>
@@ -354,11 +376,24 @@ async function start() {
                 <TaskStatus v-if="!monitoring && task" :task="task" />
             </div>
             <div v-if="!isBili || project" v-show="!isBili || !connectionEditing" class="event-column">
-                <section v-if="!project" class="panel empty-project" :aria-busy="loading">
+                <section v-if="directAppMode" class="panel purchase-panel">
+                    <div class="section-heading"><span class="section-icon"><UiIcon name="settings" /></span><div><h2>手动配置大麦 App 购票</h2><p>适用于 H5 无法解析、但官方 App 可以购票的活动</p></div></div>
+                    <p class="field-hint">设备：{{ runtime.android.serial || '未选择' }} · <router-link to="/android">连接与管理设备 →</router-link>。请先在手机大麦 App 登录并核对活动；此模式不提供 H5 余票监控。</p>
+                    <div class="two-fields space-top"><div class="field"><label class="field-label" for="direct-keyword">搜索关键词</label><input id="direct-keyword" class="text-input" v-model="androidForm.keyword" :disabled="locked" /></div><div class="field"><label class="field-label" for="direct-city">城市原文</label><input id="direct-city" class="text-input" v-model="androidForm.city" :disabled="locked" /></div></div>
+                    <div class="two-fields space-top"><div class="field"><label class="field-label" for="direct-title">活动标题匹配</label><input id="direct-title" class="text-input" v-model="androidForm.targetTitle" :disabled="locked" /></div><div class="field"><label class="field-label" for="direct-venue">场馆匹配</label><input id="direct-venue" class="text-input" v-model="androidForm.targetVenue" :disabled="locked" /></div></div>
+                    <div class="two-fields space-top"><div class="field"><label class="field-label" for="direct-date">场次原文</label><input id="direct-date" class="text-input" v-model="androidForm.date" :disabled="locked" /></div><div class="field"><label class="field-label" for="direct-price">票档原文</label><input id="direct-price" class="text-input" v-model="androidForm.price" :disabled="locked" /></div></div>
+                    <div class="two-fields space-top"><div class="field"><label class="field-label" for="direct-users">App 观演人姓名（逗号或换行分隔）</label><textarea id="direct-users" class="text-input" rows="2" v-model="androidForm.users" :disabled="locked" autocomplete="off" /></div><div class="field"><label class="field-label" for="direct-price-index">票档备用索引</label><input id="direct-price-index" class="text-input" type="number" min="0" max="100" v-model.number="androidForm.priceIndex" :disabled="locked" /></div></div>
+                    <div class="field space-top"><label class="field-label" for="direct-count">购买张数</label><input id="direct-count" class="text-input" type="number" min="1" max="20" v-model.number="form.count" :disabled="locked" /></div>
+                    <label class="check-label space-top"><input type="checkbox" v-model="form.scheduled" :disabled="locked" />定时开始</label>
+                    <div v-if="form.scheduled" class="field space-top"><label class="field-label" for="direct-start">开始时间（北京时间）</label><input id="direct-start" class="text-input" type="datetime-local" step="1" v-model="form.startAt" :disabled="locked" /></div>
+                    <p class="field-hint">提交后请在官方 App 核对订单并人工付款。为避免重复订单，每个任务只执行一轮。</p>
+                    <button class="button primary space-top" type="button" :disabled="locked || !runtime.ready" @click="startDirectApp">{{ starting ? '正在准备…' : form.scheduled ? '创建预约任务' : '开始 App 购票' }}</button>
+                </section>
+                <section v-if="!project && !directAppMode" class="panel empty-project" :aria-busy="loading">
                     <div class="empty-ticket-scene" aria-hidden="true"><div class="scene-orbit"></div><div class="decor-star star-one">✦</div><div class="decor-star star-two">✧</div><div class="ticket-illustration"><div class="ticket-illustration-top"><span>ADMIT ONE</span><UiIcon name="ticket" /></div><div class="ticket-illustration-title">下一场<br />值得期待。</div><div class="ticket-illustration-bottom"><span>LET’S GO LIVE</span><div class="barcode"></div></div></div><div class="scene-tag"><span class="live-dot"></span>READY FOR YOUR NEXT SHOW</div></div>
                     <h2>{{ loading ? '正在寻找你的下一场期待…' : '你的下一场，在哪里？' }}</h2><p>{{ isBili ? '搜索并选择活动，或填写左侧的活动链接与账号信息，' : '填写左侧的活动链接与账号信息，' }}<br />加载活动后，即可选择场次、票档与观演人。</p><div class="empty-features"><span><UiIcon name="calendar" />定时预约</span><span><UiIcon name="user" />实名观演</span><span><UiIcon name="activity" />实时进度</span></div>
                 </section>
-                <template v-if="project">
+                <template v-if="project && !directAppMode">
                     <section class="panel event-panel"><div v-if="!isBili" class="event-summary"><img v-if="project.image" :src="project.image" class="event-cover" alt="活动海报" referrerpolicy="no-referrer" @error="project.image = ''" /><div v-else class="event-cover placeholder-cover"><UiIcon name="ticket" /></div><div class="event-summary-text"><span class="pill">{{ meta.name }}{{ isBili ? ' 会员购' : ' 官方活动' }}</span><h2>{{ project.name }}</h2><p v-if="project.venue"><UiIcon name="location" />{{ project.venue }}</p><small>项目编号 {{ project.id }}</small></div></div>
                         <div v-if="!isBili" class="section-rule"></div>
                         <div class="section-heading"><span class="section-icon"><UiIcon name="calendar" /></span><div><h2>选择场次与票档</h2><p v-if="!isBili">选择你想去的那一场</p></div><span class="tiny-label">02</span></div>
