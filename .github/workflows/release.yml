@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to rebuild for Windows (for example, v0.6.1)"
+        description: "Existing release tag to rebuild (for example, v0.7.0)"
         required: true
         type: string
 
@@ -44,7 +44,7 @@ jobs:
             ];
             core.setOutput('source-ref', `refs/tags/${tag}`);
             core.setOutput('matrix', JSON.stringify({
-              include: manual ? platforms.filter(item => item.platform === 'windows-latest') : platforms,
+              include: platforms,
             }));
             try {
               const { data } = await github.rest.repos.getReleaseByTag({
@@ -53,13 +53,21 @@ jobs:
               return data.id;
             } catch (error) {
               if (error.status !== 404) throw error;
-              if (manual) throw new Error(`Release ${tag} must already exist for a Windows rebuild`);
+              if (manual) throw new Error(`Release ${tag} must already exist for a rebuild`);
             }
             const { data } = await github.rest.repos.createRelease({
               ...context.repo,
               tag_name: tag,
-              name: `app ${tag}`,
-              generate_release_notes: true,
+              name: `TicketGet ${tag} Preview`,
+              draft: true,
+              prerelease: true,
+              body: [
+                'Ticket Core 预览版：保留大麦和 Bilibili GUI，新增余票监控触发购票、大麦 Android UIAutomator2 执行器、设备与日志界面，并迁移本地凭据到系统安全存储保护的加密文件。',
+                '',
+                '安装包由 GitHub Actions 构建。真实 Android 设备上的页面识别、实际订单创建和微信送达尚未实测；付款仍需在官方页面人工完成。',
+                '',
+                '使用和真机验收步骤见仓库 README。',
+              ].join('\n'),
             });
             return data.id;
 
@@ -109,3 +117,18 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release-id }}
           tauriScript: npm run tauri
           args: ${{ matrix.args }}
+
+  publish-release:
+    needs: [create-release, build-tauri]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Publish verified installers
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              ...context.repo,
+              release_id: Number('${{ needs.create-release.outputs.release-id }}'),
+              draft: false,
+              prerelease: true,
+            });
