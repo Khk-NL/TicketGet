@@ -311,6 +311,12 @@ fn terminal(message: &str) -> bool {
     .any(|s| message.contains(s))
 }
 
+fn sold_out(message: &str) -> bool {
+    ["库存不足", "已售罄", "票已售罄", "无票", "售完"]
+        .iter()
+        .any(|text| message.contains(text))
+}
+
 pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
     let config: Config =
         serde_json::from_value(context.request.config.clone()).map_err(|_| "任务参数无效")?;
@@ -374,7 +380,15 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
                             order_url: Some(ORDERS.into()),
                         })
                     }
-                    Err(error) => last_error = error,
+                    Err(error) => {
+                        if !sold_out(&error) {
+                            return Ok(Outcome::action(
+                                format!("订单提交未获确认：{error}；请先检查官方订单页，避免重复下单"),
+                                ORDERS.into(),
+                            ));
+                        }
+                        last_error = error;
+                    }
                 }
             }
             Err(error) => last_error = error,
@@ -417,5 +431,12 @@ mod tests {
         assert!(hierarchy["structure"].get("order_1").is_some());
         assert!(hierarchy["structure"].get("unrelated").is_none());
         assert!(order_payload(&detail, &["missing".into()], 1).is_err());
+    }
+
+    #[test]
+    fn only_explicit_stock_errors_allow_another_submission() {
+        assert!(sold_out("票档已售罄"));
+        assert!(!sold_out("请求超时，结果未知"));
+        assert!(!sold_out("已有未支付订单"));
     }
 }

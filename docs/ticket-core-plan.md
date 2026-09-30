@@ -27,3 +27,10 @@ GUI 选账号、活动、场次、票档、观演人和执行方式 → 创建 `
 5. **回归和上游维护**：针对 Node/Rust 测试和前端构建，检查大麦/Bilibili 原有路径；在 README 记录真机验收步骤、未验证状态及上游同步方法。`tickets-upstream` 用定期 merge/rebase 检查，`hatickets-upstream` 用固定版本对照并按适配层有选择地同步，避免直接合并两个历史。
 
 每阶段完成并验证后单独提交并推送到 `Khk-NL/TicketGet` 的工作分支。真实活动下单、微信实际送达及 Android 真机状态必须分别记录实测结果；模拟测试只能证明本地状态转换和接口契约。
+
+## 实施记录
+
+- API 监控联动与 Android Executor 已接入；Rust 继续负责任务互斥、状态和通知，HaTickets Mobile 仅负责大麦 App 页面执行。
+- 账号 Cookie 与微信绑定数据改为加密文件，密钥存于系统凭据存储；旧明文仅在安全写入成功后清理。浏览器本地存储只保留账号展示元数据。
+- Android 仅支持大麦，Bilibili 沿用原有 API 链路。上游同步方法见 [`upstream-sync.md`](upstream-sync.md)。
+- Windows CI 已验证模拟测试和构建；真实订单、真机页面识别和微信实际送达尚未验证，验收步骤见 README。

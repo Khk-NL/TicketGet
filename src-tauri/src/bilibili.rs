@@ -300,6 +300,10 @@ fn is_terminal(errno: i64) -> bool {
     )
 }
 
+fn sold_out(message: &str) -> bool {
+    ["库存不足", "已售罄", "无票", "售完"].iter().any(|text| message.contains(text))
+}
+
 pub fn created_order(response: &Value) -> Option<String> {
     if code(response) != 0 || string(first(response, &["msg", "message"])).contains("defaultBBR") {
         return None;
@@ -457,8 +461,11 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
                     ORDERS.into(),
                 ));
             }
-            if errno == 100051 {
-                prepared = Value::Null;
+            if !sold_out(&last_error) {
+                return Ok(Outcome::action(
+                    format!("订单提交未获确认：{last_error}；请先检查官方订单页，避免重复下单"),
+                    ORDERS.into(),
+                ));
             }
             let delay = if matches!(errno, 3 | 221 | 900001 | 900002) {
                 context.request.interval_ms.max(3000)
@@ -565,5 +572,12 @@ mod tests {
         assert!(project_data(json!({ "success": true, "data": { "screenList": [] } })).is_ok());
         assert!(project_data(json!({ "success": false, "code": 0, "data": {} })).is_err());
         assert!(data(json!({ "success": true, "data": {} })).is_err());
+    }
+
+    #[test]
+    fn only_explicit_stock_errors_allow_another_submission() {
+        assert!(sold_out("该票档库存不足"));
+        assert!(!sold_out("请求超时，结果未知"));
+        assert!(!sold_out("订单已存在"));
     }
 }
