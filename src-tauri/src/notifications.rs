@@ -1,5 +1,6 @@
 use crate::{
     clock,
+    secure_store,
     wechat_api::{self, ApiError, UpdatesResponse, WechatApi},
 };
 use serde::{Deserialize, Serialize};
@@ -147,7 +148,7 @@ pub struct WechatManager {
 
 impl WechatManager {
     pub fn new(path: PathBuf) -> Result<Self, String> {
-        let (account, load_error) = match read_binding(&path) {
+        let (account, load_error) = match read_binding_with_migration(&path) {
             Ok(value) => (value, false),
             Err(_) => (None, true),
         };
@@ -665,7 +666,31 @@ impl WechatManager {
     }
 }
 
+fn read_binding_with_migration(path: &Path) -> Result<Option<Binding>, String> {
+    if path.extension().is_none_or(|extension| extension != "enc") {
+        return read_binding(path);
+    }
+    let legacy = path.with_extension("json");
+    if let Some(account) = read_binding(path)? {
+        if legacy.exists() {
+            fs::remove_file(&legacy).map_err(|_| "旧版微信明文凭据清理失败")?;
+        }
+        return Ok(Some(account));
+    }
+    let Some(account) = read_binding(&legacy)? else { return Ok(None) };
+    write_binding(path, &account)?;
+    fs::remove_file(&legacy).map_err(|_| "旧版微信明文凭据清理失败")?;
+    Ok(Some(account))
+}
+
 fn read_binding(path: &Path) -> Result<Option<Binding>, String> {
+    if path.extension().is_some_and(|extension| extension == "enc") {
+        let Some(bytes) = secure_store::read_secret(path)? else { return Ok(None) };
+        let stored: StoredBinding = serde_json::from_slice(&bytes).map_err(|_| "微信绑定数据损坏")?;
+        if stored.version != 1 { return Err("暂不支持此版本的微信绑定数据".into()); }
+        stored.account.validate()?;
+        return Ok(Some(stored.account));
+    }
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -688,6 +713,11 @@ fn read_binding(path: &Path) -> Result<Option<Binding>, String> {
 
 fn write_binding(path: &Path, account: &Binding) -> Result<(), String> {
     account.validate()?;
+    if path.extension().is_some_and(|extension| extension == "enc") {
+        let bytes = serde_json::to_vec(&StoredBinding { version: 1, account: account.clone() })
+            .map_err(|_| "微信凭证无法保存")?;
+        return secure_store::write_secret(path, &bytes);
+    }
     let parent = path.parent().ok_or("微信存储目录不可用")?;
     fs::create_dir_all(parent).map_err(|_| "无法创建微信凭证目录")?;
     #[cfg(unix)]

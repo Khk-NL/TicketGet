@@ -196,7 +196,7 @@ onBeforeUnmount(deactivate);
             <button v-if="connection.accountId || ['expired', 'error'].includes(connection.status)" class="text-button" :disabled="!desktop || Boolean(busy)" @click="disconnect">{{ busy === 'disconnect' ? '正在解绑…' : '解除绑定' }}</button>
         </div>
         <p v-if="result" :class="failed ? 'inline-error' : 'field-hint'" role="status">{{ result }}</p>
-        <p class="field-hint">微信登录凭证以明文保存在此设备的应用数据目录。关闭应用后将停止提醒；长时间没有对话后如发送失败，请向 Bot 再发一条消息刷新会话。购票与监控任务使用启动时已保存的提醒开关和接收人，更改设置只对新任务生效。</p>
+        <p class="field-hint">微信登录凭证使用系统凭据存储保护的密钥加密保存在此设备。关闭应用后将停止提醒；长时间没有对话后如发送失败，请向 Bot 再发一条消息刷新会话。购票与监控任务使用启动时已保存的提醒开关和接收人，更改设置只对新任务生效。</p>
     </section>
 </template>
 <style scoped>

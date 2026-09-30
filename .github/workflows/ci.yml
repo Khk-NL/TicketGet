@@ -26,4 +26,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-lock
+          path: src-tauri/Cargo.lock

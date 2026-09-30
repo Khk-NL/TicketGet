@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Manager;
-use tickets::{android, bilibili, clock, dm, notifications, subscriptions, tasks, utils, version};
+use tickets::{android, bilibili, clock, dm, notifications, secure_store, subscriptions, tasks, utils, version};
 
 fn main() {
     tauri::Builder::default()
@@ -12,7 +12,7 @@ fn main() {
                 .app_data_dir()
                 .ok_or("无法找到应用数据目录")?;
             let wechat =
-                notifications::WechatManager::new(directory.join("wechat").join("binding.json"))?;
+                notifications::WechatManager::new(directory.join("wechat").join("binding.enc"))?;
             wechat.resume();
             app.manage(wechat);
             Ok(())
@@ -39,6 +39,9 @@ fn main() {
             tasks::provide_ticket_credentials,
             android::android_environment,
             android::setup_android_environment,
+            secure_store::put_account_credential,
+            secure_store::get_account_credential,
+            secure_store::delete_account_credential,
             clock::sync_clock,
             subscriptions::refresh_subscription,
             subscriptions::remove_subscription,

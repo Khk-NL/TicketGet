@@ -47,12 +47,21 @@ export function resolveAccount(state, platform, id = "") {
     return items.find(item => item.id === state.defaults[platform]) || items[0];
 }
 
-export function loadAccounts(storage, createId = () => crypto.randomUUID(), now = Date.now()) {
+export function accountMetadata(state) {
+    return { defaults: state.defaults, items: state.items.map(({ cookie, ...item }) => item) };
+}
+
+export function loadAccounts(storage) {
     const raw = storage.getItem(accountStorageKey);
-    let state = raw === null ? emptyAccounts() : JSON.parse(raw);
+    const state = raw === null ? emptyAccounts() : JSON.parse(raw);
     if (!state || !Array.isArray(state.items) || !state.defaults || typeof state.defaults !== "object"
-        || state.items.some(item => !item || typeof item.id !== "string" || !item.id || !["dm", "bilibili"].includes(item.platform) || typeof item.cookie !== "string" || typeof item.name !== "string")
+        || state.items.some(item => !item || typeof item.id !== "string" || !item.id || !["dm", "bilibili"].includes(item.platform) || (item.cookie !== undefined && typeof item.cookie !== "string") || typeof item.name !== "string")
         || new Set(state.items.map(item => item.id)).size !== state.items.length) throw new Error("账号存储格式无效");
+    return state;
+}
+
+export async function migrateAccounts(storage, vault, createId = () => crypto.randomUUID(), now = Date.now()) {
+    let state = loadAccounts(storage);
     const updates = [];
     for (const platform of ["dm", "bilibili"]) {
         for (const prefix of ["tickets.draft", "tickets.monitor-draft"]) {
@@ -68,6 +77,11 @@ export function loadAccounts(storage, createId = () => crypto.randomUUID(), now 
                 const cookie = legacy.cookie.trim();
                 let account = state.items.find(item => item.platform === platform && item.cookie === cookie);
                 if (!account) {
+                    for (const candidate of state.items.filter(item => item.platform === platform && !item.cookie)) {
+                        if (await vault.get(candidate.id) === cookie) { account = candidate; break; }
+                    }
+                }
+                if (!account) {
                     account = { id: createId(), platform, name: `${platform === "dm" ? "大麦" : "Bilibili"}${prefix.includes("monitor") ? "监控" : "购票"}账号（已迁入）`, cookie, updatedAt: now };
                     state = { items: [...state.items, account], defaults: { ...state.defaults, [platform]: state.defaults[platform] || account.id } };
                 }
@@ -76,10 +90,15 @@ export function loadAccounts(storage, createId = () => crypto.randomUUID(), now 
             updates.push([key, draft]);
         }
     }
-    if (updates.length) {
-        // 先保存账号，再清理旧表单；中途失败时可安全重试。
-        storage.setItem(accountStorageKey, JSON.stringify(state));
-        for (const [key, draft] of updates) storage.setItem(key, JSON.stringify(draft));
+    for (const item of state.items) {
+        if (item.cookie) await vault.put(item.id, item.cookie);
+        else if (typeof await vault.get(item.id) !== "string") throw new Error("账号凭据不存在，请检查系统凭据存储");
     }
-    return state;
+    const metadata = accountMetadata(state);
+    // 仅在安全存储成功后替换旧账号数据；旧表单失败时可再次迁移。
+    storage.setItem(accountStorageKey, JSON.stringify(metadata));
+    for (const [key, draft] of updates) storage.setItem(key, JSON.stringify(draft));
+    const items = [];
+    for (const item of metadata.items) items.push({ ...item, cookie: await vault.get(item.id) });
+    return { ...metadata, items };
 }

@@ -8,7 +8,7 @@ import { initSettingTable, changeLogTableName, initLogTable, insert, select, sel
 import successAudio from "../assets/success-audio.mp3";
 import { applyTheme } from "./theme";
 import { setWechatEnabled, syncWechatConnection, taskWechatConfig, testWechatNotification as sendWechatTest } from "./wechatSettings";
-import { accountStorageKey, emptyAccounts, loadAccounts, upsertAccount, removeAccount, defaultAccount } from "./accounts";
+import { accountStorageKey, accountMetadata, emptyAccounts, loadAccounts, migrateAccounts, upsertAccount, removeAccount, defaultAccount } from "./accounts";
 import { normalizeSettings, commitSettings, restoreLegacySettings } from "./settings";
 
 export const desktop = typeof window !== "undefined" && Boolean(window.__TAURI_IPC__);
@@ -125,22 +125,32 @@ export async function refreshAndroidEnvironment() {
 
 function persistAccounts(state) {
     if (runtime.accountError) throw new Error(runtime.accountError);
-    try { localStorage.setItem(accountStorageKey, JSON.stringify(state)); }
+    try { localStorage.setItem(accountStorageKey, JSON.stringify(accountMetadata(state))); }
     catch { throw new Error("账号无法保存到本机，修改尚未生效，请检查存储空间或权限"); }
     runtime.accounts = state;
 }
 
-export function saveAccount(input) {
-    persistAccounts(upsertAccount(runtime.accounts, input));
+export async function saveAccount(input) {
+    const state = upsertAccount(runtime.accounts, input);
+    const account = state.items.find(item => item.id === (input.id || state.items.at(-1).id));
+    await call("put_account_credential", { id: account.id, cookie: account.cookie });
+    persistAccounts(state);
     record("system", "账号凭证已保存", "success");
 }
-export function deleteAccount(id) {
+export async function deleteAccount(id) {
     persistAccounts(removeAccount(runtime.accounts, id));
+    await call("delete_account_credential", { id });
     record("system", "账号凭证已删除", "info");
 }
 export function setDefaultAccount(id) { persistAccounts(defaultAccount(runtime.accounts, id)); }
-export function reloadAccounts() {
-    try { const state = loadAccounts(localStorage); runtime.accounts = state; runtime.accountError = ""; }
+export async function reloadAccounts() {
+    try {
+        runtime.accounts = await migrateAccounts(localStorage, {
+            put: (id, cookie) => call("put_account_credential", { id, cookie }),
+            get: id => call("get_account_credential", { id }),
+        });
+        runtime.accountError = "";
+    }
     catch { runtime.accountError = "账号读取或迁移失败，原数据已保留，请检查本机存储后重试"; }
 }
 
@@ -210,6 +220,7 @@ export function initializeRuntime() {
             runtime.tasks[task.id] = task;
         }
         if (desktop) {
+            await reloadAccounts();
             try {
                 await initSettingTable();
                 const settings = (await selectAll(settingTableName))[0];

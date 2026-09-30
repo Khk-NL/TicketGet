@@ -13,13 +13,13 @@ const error = ref("");
 function reset() { Object.assign(form, { id: "", name: "", cookie: "" }); showCookie.value = false; error.value = ""; }
 function selectPlatform(id) { platform.value = id; reset(); }
 function edit(account) { Object.assign(form, { id: account.id, name: account.name, cookie: account.cookie }); showCookie.value = false; error.value = ""; }
-function save() {
+async function save() {
     error.value = "";
-    try { saveAccount({ ...form, platform: platform.value }); reset(); Message.success("账号已保存，购票和监控可直接选用"); }
+    try { await saveAccount({ ...form, platform: platform.value }); reset(); Message.success("账号已保存，购票和监控可直接选用"); }
     catch (value) { error.value = errorText(value); }
 }
-function remove(id) {
-    try { deleteAccount(id); if (form.id === id) reset(); Message.success("账号已删除"); }
+async function remove(id) {
+    try { await deleteAccount(id); if (form.id === id) reset(); Message.success("账号已删除"); }
     catch (value) { error.value = errorText(value); }
 }
 function makeDefault(id) {
@@ -46,7 +46,7 @@ function makeDefault(id) {
             <div class="field space-top"><label class="field-label" for="account-name">账号名称</label><input id="account-name" class="text-input" v-model="form.name" maxlength="60" placeholder="例如：我的常用账号" autocomplete="off" /></div>
             <div class="label-row space-top"><label class="field-label" for="account-cookie">账号 Cookie</label><button type="button" class="text-button" @click="showCookie = !showCookie">{{ showCookie ? '隐藏' : '显示' }}</button></div>
             <textarea id="account-cookie" class="text-input cookie-input" :class="{ concealed: !showCookie }" rows="4" v-model="form.cookie" placeholder="粘贴已登录账号的完整 Cookie" autocomplete="off" spellcheck="false"></textarea>
-            <p class="field-hint">Cookie 以明文保存在当前设备的统一账号库中。账号单独保存，无需再点击页面顶部的保存设置。保存只检查格式，登录是否有效以平台查询结果为准。</p>
+            <p class="field-hint">Cookie 使用系统凭据存储保护的密钥加密保存在当前设备。账号单独保存，无需再点击页面顶部的保存设置。保存只检查格式，登录是否有效以平台查询结果为准。</p>
             <p class="field-hint">更新或删除账号后，已启动的任务继续使用启动时的 Cookie；新查询和新任务使用当前账号。Cookie 过期时，在这里更新一次即可。</p>
             <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
             <button class="button primary small space-top" type="submit" :disabled="!!runtime.accountError">{{ form.id ? '保存更新' : '保存账号' }}<UiIcon name="check" /></button>

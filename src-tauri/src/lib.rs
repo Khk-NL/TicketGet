@@ -11,4 +11,5 @@ pub mod tasks;
 
 pub mod monitor;
 pub mod notifications;
+pub mod secure_store;
 pub mod wechat_api;
