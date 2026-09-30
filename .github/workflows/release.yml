@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to rebuild (for example, v0.7.0)"
+        description: "Existing release tag to rebuild (for example, v0.8.0)"
         required: true
         type: string
 
@@ -62,9 +62,9 @@ jobs:
               draft: true,
               prerelease: true,
               body: [
-                'Ticket Core 预览版：保留大麦和 Bilibili GUI，新增余票监控触发购票、大麦 Android UIAutomator2 执行器、设备与日志界面，并迁移本地凭据到系统安全存储保护的加密文件。',
+                'Ticket Core 预览版：大麦 H5 账号可在浏览器登录后自动读取 Cookie；App 专用活动可绕开 H5 活动解析，直接配置 Android UIAutomator2 购票任务。Android 设备页支持连接本机模拟器 ADB 端口。保留原有大麦、Bilibili、余票监控与通知功能。',
                 '',
-                '安装包由 GitHub Actions 构建。真实 Android 设备上的页面识别、实际订单创建和微信送达尚未实测；付款仍需在官方页面人工完成。',
+                '安装包由 GitHub Actions 构建。Android 运行仍需本机 Python 3.10–3.13、ADB 及首次安装 UIAutomator2 依赖。App 专用活动的直接任务不提供 H5 余票监控。真实设备上的页面识别、订单创建和微信送达尚未实测；付款需在官方页面人工完成。',
                 '',
                 '使用和真机验收步骤见仓库 README。',
               ].join('\n'),
