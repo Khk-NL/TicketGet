@@ -34,7 +34,7 @@ export const runtime = reactive({
 export const activeTasks = computed(() => Object.values(runtime.tasks).filter(isActive));
 export const taskList = computed(() => Object.values(runtime.tasks).sort((a, b) => b.updatedAt - a.updatedAt));
 export function isActive(task) { return task && ["waiting", "running"].includes(task.status); }
-export const statusLabels = { waiting: "等待开始", found: "发现余票", completed: "监控结束", running: "执行中", succeeded: "待付款", failed: "未完成", cancelled: "已停止", needs_action: "需要处理", device_error: "设备错误", interrupted: "已中断" };
+export const statusLabels = { waiting: "等待开始", found: "发现余票", completed: "监控结束", running: "执行中", probe_ready: "页面探测通过", validation_ready: "提交前验证通过", succeeded: "待付款", failed: "未完成", cancelled: "已停止", needs_action: "需要处理", device_error: "设备错误", interrupted: "已中断" };
 export function currentTask(platform) {
     const purchases = taskList.value.filter(task => task.platform === platform && task.mode !== "monitor");
     return purchases.find(isActive) || purchases[0];

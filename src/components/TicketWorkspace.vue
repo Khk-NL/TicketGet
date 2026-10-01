@@ -28,6 +28,8 @@ const form = reactive({
     offsetMs: runtime.clock?.offsetMs ?? saved.offsetMs ?? 0,
 });
 const androidForm = reactive({ keyword: "", targetTitle: "", targetVenue: "", city: "", date: "", price: "", priceIndex: 0, users: "" });
+const androidMode = ref("probe");
+const androidAction = computed(() => ({ probe: "探测 App 页面", validation: "验证到提交前", submit: "开始 App 购票" })[androidMode.value]);
 const androidUsers = computed(() => androidForm.users.split(/[,，\n]/).map(value => value.trim()).filter(Boolean));
 watch(form, value => {
     if (runtime.accountError) return;
@@ -251,7 +253,7 @@ async function startMonitor(options) {
 function purchaseDetails(address) {
     if (!isBili && form.executor === "android") return {
         executor: "android", count: form.count,
-        android: { serial: runtime.android.serial, pythonPath: runtime.android.pythonPath,
+        android: { serial: runtime.android.serial, mode: monitoring.value ? "submit" : androidMode.value, pythonPath: runtime.android.pythonPath,
             adbPath: runtime.android.adbPath, keyword: androidForm.keyword.trim(),
             targetTitle: androidForm.targetTitle.trim(), targetVenue: androidForm.targetVenue.trim(),
             city: androidForm.city.trim(), date: androidForm.date.trim(), price: androidForm.price.trim(),
@@ -384,10 +386,11 @@ async function start() {
                     <div class="two-fields space-top"><div class="field"><label class="field-label" for="direct-date">场次原文</label><input id="direct-date" class="text-input" v-model="androidForm.date" :disabled="locked" /></div><div class="field"><label class="field-label" for="direct-price">票档原文</label><input id="direct-price" class="text-input" v-model="androidForm.price" :disabled="locked" /></div></div>
                     <div class="two-fields space-top"><div class="field"><label class="field-label" for="direct-users">App 观演人姓名（逗号或换行分隔）</label><textarea id="direct-users" class="text-input" rows="2" v-model="androidForm.users" :disabled="locked" autocomplete="off" /></div><div class="field"><label class="field-label" for="direct-price-index">票档备用索引</label><input id="direct-price-index" class="text-input" type="number" min="0" max="100" v-model.number="androidForm.priceIndex" :disabled="locked" /></div></div>
                     <div class="field space-top"><label class="field-label" for="direct-count">购买张数</label><input id="direct-count" class="text-input" type="number" min="1" max="20" v-model.number="form.count" :disabled="locked" /></div>
+                    <div class="field space-top"><label class="field-label" for="direct-android-mode">执行方式</label><select id="direct-android-mode" class="text-input" v-model="androidMode" :disabled="locked"><option value="probe">探测页面（不点击购票）</option><option value="validation">验证到订单确认页（不提交）</option><option value="submit">正式提交订单</option></select></div>
                     <label class="check-label space-top"><input type="checkbox" v-model="form.scheduled" :disabled="locked" />定时开始</label>
                     <div v-if="form.scheduled" class="field space-top"><label class="field-label" for="direct-start">开始时间（北京时间）</label><input id="direct-start" class="text-input" type="datetime-local" step="1" v-model="form.startAt" :disabled="locked" /></div>
-                    <p class="field-hint">提交后请在官方 App 核对订单并人工付款。为避免重复订单，每个任务只执行一轮。</p>
-                    <button class="button primary space-top" type="button" :disabled="locked || !runtime.ready" @click="startDirectApp">{{ starting ? '正在准备…' : form.scheduled ? '创建预约任务' : '开始 App 购票' }}</button>
+                    <p class="field-hint">探测与验证不会提交订单；正式提交后请在官方 App 核对并人工付款。每个任务只执行一轮。</p>
+                    <button class="button primary space-top" type="button" :disabled="locked || !runtime.ready" @click="startDirectApp">{{ starting ? '正在准备…' : form.scheduled ? '创建预约任务' : androidAction }}</button>
                 </section>
                 <section v-if="!project && !directAppMode" class="panel empty-project" :aria-busy="loading">
                     <div class="empty-ticket-scene" aria-hidden="true"><div class="scene-orbit"></div><div class="decor-star star-one">✦</div><div class="decor-star star-two">✧</div><div class="ticket-illustration"><div class="ticket-illustration-top"><span>ADMIT ONE</span><UiIcon name="ticket" /></div><div class="ticket-illustration-title">下一场<br />值得期待。</div><div class="ticket-illustration-bottom"><span>LET’S GO LIVE</span><div class="barcode"></div></div></div><div class="scene-tag"><span class="live-dot"></span>READY FOR YOUR NEXT SHOW</div></div>
@@ -410,6 +413,7 @@ async function start() {
                         <div class="two-fields space-top"><div class="field"><label class="field-label" for="android-title">活动标题匹配</label><input id="android-title" class="text-input" v-model="androidForm.targetTitle" :disabled="locked" /></div><div class="field"><label class="field-label" for="android-venue">场馆匹配</label><input id="android-venue" class="text-input" v-model="androidForm.targetVenue" :disabled="locked" /></div></div>
                         <div class="two-fields space-top"><div class="field"><label class="field-label" for="android-users">App 观演人姓名（逗号或换行分隔）</label><textarea id="android-users" class="text-input" rows="2" v-model="androidForm.users" :disabled="locked" autocomplete="off" /></div><div class="field"><label class="field-label" for="android-price-index">票档备用索引</label><input id="android-price-index" class="text-input" type="number" min="0" max="100" v-model.number="androidForm.priceIndex" :disabled="locked" /><small class="field-hint">仅在 App 文本匹配失败时使用，从 0 开始。</small></div></div>
                         <p class="field-hint">姓名仅保留在当前页面内存中，不写入表单草稿；请先在手机大麦 App 添加观演人并登录。</p>
+                        <div v-if="!monitoring" class="field space-top"><label class="field-label" for="android-mode">执行方式</label><select id="android-mode" class="text-input" v-model="androidMode" :disabled="locked"><option value="probe">探测页面（不点击购票）</option><option value="validation">验证到订单确认页（不提交）</option><option value="submit">正式提交订单</option></select><small class="field-hint">建议先探测、再验证。监控联动购票始终使用正式提交。</small></div>
                     </section>
                     <section v-if="monitoring && ticket" class="panel purchase-panel">
                         <div class="section-heading"><span class="section-icon"><UiIcon name="user" /></span><div><h2>有票后的操作</h2><p>可以只提醒，也可以使用已选账号自动创建订单</p></div></div>
@@ -438,7 +442,7 @@ async function start() {
                         <div class="three-fields space-top"><div v-if="form.executor !== 'android'" class="field"><label class="field-label" :for="`${platform}-attempts`">最多尝试 / 次</label><input :id="`${platform}-attempts`" class="text-input" type="number" v-model.number="form.maxAttempts" min="1" max="100" :disabled="locked" /></div><div v-if="form.executor !== 'android'" class="field"><label class="field-label" :for="`${platform}-interval`">重试间隔 / ms</label><input :id="`${platform}-interval`" class="text-input" type="number" v-model.number="form.intervalMs" min="300" max="60000" step="100" :disabled="locked" /></div><div class="field"><label class="field-label" :for="`${platform}-offset`">修正时间 / ms</label><input :id="`${platform}-offset`" class="text-input" type="number" v-model.number="form.offsetMs" min="-86400000" max="86400000" :disabled="locked" /></div></div>
                         <p class="field-hint">修正值 = 服务器时间 − 本机时间。任务开始后可切换平台，请保持电脑唤醒。</p>
                         <p class="field-hint">{{ runtime.settings.wechat.enabled ? '已启用微信提醒：订单创建成功后发送待支付通知。新任务使用启动时已保存的通知设置。' : '当前仅在应用内提醒。可在设置中启用微信购票与余票提醒。' }} <router-link to="/settings">通知设置 →</router-link></p>
-                        <div class="purchase-footer"><div><small>预计总额</small><strong><span>¥</span> {{ money((ticket?.price || 0) * form.count) }}</strong></div><button class="button primary" :disabled="locked || !ticket || (form.executor !== 'android' && (screen?.disabled || ticket.disabled)) || !runtime.ready || ticketLoading" @click="start"><UiIcon :name="starting ? 'refresh' : 'play'" :class="{ spinning: starting }" />{{ starting ? '正在准备…' : running ? '任务进行中' : form.scheduled ? '创建预约任务' : '开始购票' }}</button></div><small class="field-hint">创建订单后请在官方页面及时支付。</small>
+                        <div class="purchase-footer"><div><small>预计总额</small><strong><span>¥</span> {{ money((ticket?.price || 0) * form.count) }}</strong></div><button class="button primary" :disabled="locked || !ticket || (form.executor !== 'android' && (screen?.disabled || ticket.disabled)) || !runtime.ready || ticketLoading" @click="start"><UiIcon :name="starting ? 'refresh' : 'play'" :class="{ spinning: starting }" />{{ starting ? '正在准备…' : running ? '任务进行中' : form.scheduled ? '创建预约任务' : form.executor === 'android' ? androidAction : '开始购票' }}</button></div><small class="field-hint">正式提交创建订单后请在官方页面及时支付。</small>
                     </section>
                 </template>
             </div>

@@ -5246,7 +5246,7 @@ dependencies = [
 
 [[package]]
 name = "tickets"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "aes-gcm",
  "base64 0.21.2",

@@ -144,9 +144,16 @@ npm run tauri build
 当前已通过 Windows CI 的 Node 测试、Rust 测试与前端构建。尚未在真实 Android 设备、真实活动或微信接收人上验证订单创建与送达。
 
 1. 在 **Android 设备** 页连接已授权 USB 调试的手机，确认 Python、ADB、UIAutomator2 与设备均显示就绪；在手机上登录大麦 App，并确认目标活动、场次、票档和观演人姓名与 GUI 输入完全一致。
-2. 真机页面验收可先用随附的 HaTickets Mobile 命令行运行 `probe_only=true`，再用 `probe_only=false, if_commit_order=false` 检查场次、票档和观演人选择；配置模板在 `src-tauri/resources/hatickets/mobile/config.example.jsonc`，通过 `HATICKETS_CONFIG_PATH` 指向本机副本后，从 `src-tauri/resources/hatickets` 目录执行 `python -m mobile.damai_app --serial <设备序列号>`。这些模式不会提交订单。GUI 购票任务使用正式提交模式；运行前确认活动允许测试下单，并准备人工核对和付款。`probe_ready`、`validation_ready` 均不表示订单已创建。
-3. 分别启动 H5/API 和 Android 的监控联动任务。无票时应持续监控；明确发现库存后应只创建一个购票子任务。若显示“待付款”，到大麦 App 或官方订单页核对目标活动、金额和订单状态，再人工付款。若为“需要处理”，先核对官方订单，避免重复下单。
+2. 在大麦工作台选择 Android 执行方式（H5 无法解析时可选“手动配置大麦 App 购票”）。先选“探测页面”，核对任务显示“页面探测通过”；再选“验证到订单确认页”，核对“提交前验证通过”。前者不点击购票，后者会进入订单确认页、选择观演人但不提交。两种状态均不表示订单已创建，均不会触发待付款通知。页面不符时查看 **Android 设备** 页的执行日志和手机画面。也可用随附 HaTickets Mobile 命令行诊断：配置模板 `src-tauri/resources/hatickets/mobile/config.example.jsonc`，设置 `HATICKETS_CONFIG_PATH` 指向本机副本后，在 `src-tauri/resources/hatickets` 目录执行 `python -m mobile.damai_app --serial <设备序列号>`；`probe_only=true` 是页面探测，`probe_only=false, if_commit_order=false` 是提交前验证。
+3. 确认前两步后，手动选择“正式提交订单”进行真实活动验收。分别启动 H5/API 和 Android 的监控联动任务；监控联动始终使用正式提交。无票时应持续监控；明确发现库存后应只创建一个购票子任务。若显示“待付款”，到大麦 App 或官方订单页核对目标活动、金额和订单状态，再人工付款。若为“需要处理”，先核对官方订单，避免重复下单。
 4. 用 Bilibili 活动回归已有查询、普通监控与购票任务；验证微信测试通知、实际订单通知及 GUI 状态。记录活动、设备系统版本、App 版本、执行方式、任务最终状态和订单核对结果，避免在日志中记录 Cookie、Token 或完整身份信息。
+
+### 真机调试辅助工具
+
+- [Android 官方真机调试说明](https://developer.android.com/studio/run/device)：开启开发者选项和 USB 调试，在手机上授权电脑；Windows 如未识别设备，按手机厂商说明安装 USB 驱动。确认 `adb devices -l` 中状态为 `device`，然后在 TicketGet 的 **Android 设备** 页选择同一序列号。
+- [scrcpy](https://github.com/Genymobile/scrcpy)：可选，用于在电脑上查看和操作真机画面；使用 ADB 连接，无需改造大麦 App。请从项目官方发布页获取。TicketGet 不依赖此工具。
+- [UIAutomator2](https://github.com/openatx/uiautomator2)：当前 Android 执行器已使用它识别与操作页面。需要进一步定位控件时可在本机 Python 环境中检查 `u2.connect(设备序列号).app_current()`、`dump_hierarchy()` 和 `screenshot()`；页面结构和截图可能含账号及身份信息，只保存在本机，分享前先脱敏。
+- [Appium Inspector](https://github.com/appium/appium-inspector)：可选的页面层级和控件检查工具，需自行安装并运行 Appium 服务，适合现有控件定位失败时使用。日常探测不需要安装。
 
 上游更新分别跟踪 `shiyutim/tickets` 与 `currycan/HaTickets`；固定版本和同步步骤见 [上游同步说明](docs/upstream-sync.md)。
 

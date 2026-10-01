@@ -62,7 +62,7 @@ jobs:
               draft: true,
               prerelease: true,
               body: [
-                'Ticket Core 预览版：大麦 H5 账号可在浏览器登录后自动读取 Cookie；App 专用活动可绕开 H5 活动解析，直接配置 Android UIAutomator2 购票任务。Android 设备页支持连接本机模拟器 ADB 端口。保留原有大麦、Bilibili、余票监控与通知功能。',
+                'Ticket Core 预览版：大麦 H5 账号可在浏览器登录后自动读取 Cookie；App 专用活动可直接配置 Android UIAutomator2 任务。Android GUI 新增页面探测、提交前验证和正式提交三种模式，调试结果不会显示为待付款。保留原有大麦、Bilibili、余票监控与通知功能。',
                 '',
                 '安装包由 GitHub Actions 构建。Android 运行仍需本机 Python 3.10–3.13、ADB 及首次安装 UIAutomator2 依赖。App 专用活动的直接任务不提供 H5 余票监控。真实设备上的页面识别、订单创建和微信送达尚未实测；付款需在官方页面人工完成。',
                 '',

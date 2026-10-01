@@ -13,6 +13,8 @@ const DEPENDENCIES: &[&str] = &["uiautomator2>=3.2,<4", "adbutils>=2.9,<3", "sel
 #[serde(rename_all = "camelCase")]
 struct AndroidConfig {
     serial: String,
+    #[serde(default)]
+    mode: AndroidMode,
     keyword: String,
     users: Vec<String>,
     city: String,
@@ -28,6 +30,16 @@ struct AndroidConfig {
     python_path: String,
     #[serde(default)]
     adb_path: String,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AndroidMode { Probe, Validation, #[default] Submit }
+
+impl AndroidMode {
+    fn key(self) -> &'static str {
+        match self { Self::Probe => "probe", Self::Validation => "validation", Self::Submit => "submit" }
+    }
 }
 
 #[derive(Serialize)]
@@ -193,8 +205,16 @@ fn source_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-fn summary_outcome(summary: &RunSummary, order_url: &str) -> Outcome {
-    if summary.exit_code == 0 && summary.mode.as_deref() == Some("submit")
+fn summary_outcome(summary: &RunSummary, order_url: &str, requested_mode: AndroidMode) -> Outcome {
+    if summary.exit_code == 0 && summary.mode.as_deref() == Some(requested_mode.key()) {
+        if requested_mode == AndroidMode::Probe && summary.outcome == "probe_ready" {
+            return Outcome { status: "probe_ready", message: "已识别目标活动页和购票控件；本次未点击购票，也未创建订单".into(), order_url: None };
+        }
+        if requested_mode == AndroidMode::Validation && summary.outcome == "validation_ready" {
+            return Outcome { status: "validation_ready", message: "已到订单确认页并选择观演人；本次未提交订单".into(), order_url: None };
+        }
+    }
+    if requested_mode == AndroidMode::Submit && summary.exit_code == 0 && summary.mode.as_deref() == Some("submit")
         && matches!(summary.outcome.as_str(), "order_submitted" | "order_pending_payment") {
         let message = if summary.outcome == "order_pending_payment" {
             "大麦 App 检测到待付款订单，请核对是否为目标活动并人工付款"
@@ -204,6 +224,21 @@ fn summary_outcome(summary: &RunSummary, order_url: &str) -> Outcome {
         return Outcome { status: "succeeded", message: message.into(), order_url: Some(order_url.into()) };
     }
     if summary.exit_code == 12 { return Outcome { status: "device_error", message: "Android 设备或运行环境出错，请检查设备连接与执行日志".into(), order_url: None }; }
+    if requested_mode != AndroidMode::Submit {
+        if summary.mode.as_deref() != Some(requested_mode.key()) {
+            return Outcome { status: "needs_action", message: "Android 实际执行模式与所选调试模式不符，请先核对官方订单和执行日志".into(), order_url: Some(order_url.into()) };
+        }
+        if summary.outcome == "preexisting_pending_order" {
+            return Outcome { status: "needs_action", message: "账号已有待付款订单；本次调试未创建订单，请在官方 App 核对".into(), order_url: Some(order_url.into()) };
+        }
+        if summary.outcome == "order_pending_payment" || summary.outcome == "order_submitted" {
+            return Outcome { status: "needs_action", message: "调试时检测到订单状态，请在官方 App 核对来源，避免重复下单".into(), order_url: Some(order_url.into()) };
+        }
+        if summary.outcome == "captcha" {
+            return Outcome { status: "needs_action", message: "大麦 App 需要人工完成验证；本次调试未提交订单".into(), order_url: None };
+        }
+        return Outcome { status: "failed", message: format!("Android 调试未达到预期页面（{}），请查看执行日志与手机画面", summary.outcome), order_url: None };
+    }
     if summary.outcome == "captcha" { return Outcome { status: "needs_action", message: "大麦 App 需要人工完成验证，请在手机处理后重新启动任务".into(), order_url: Some(order_url.into()) }; }
     if summary.exit_code == 10 || summary.terminal_reason.as_deref() == Some("sold_out") {
         return Outcome { status: "failed", message: "Android 本轮未创建订单，可在下一次库存检测时重试".into(), order_url: None };
@@ -239,12 +274,16 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
         "price_index": config.price_index,
         "target_title": if config.target_title.is_empty() { Value::Null } else { json!(config.target_title) },
         "target_venue": if config.target_venue.is_empty() { Value::Null } else { json!(config.target_venue) },
-        "probe_only": false,
-        "if_commit_order": true, "auto_navigate": true, "sell_start_time": null,
+        "probe_only": config.mode == AndroidMode::Probe,
+        "if_commit_order": config.mode == AndroidMode::Submit, "auto_navigate": true, "sell_start_time": null,
         "rush_mode": false, "fast_retry_count": 2, "fast_retry_interval_ms": 1000
     });
     fs::write(&files.config, payload.to_string()).map_err(|e| e.to_string())?;
-    context.report("running", "已连接 Android 设备，正在执行大麦 App 购票流程", 1, None);
+    context.report("running", match config.mode {
+        AndroidMode::Probe => "已连接 Android 设备，正在探测大麦 App 页面",
+        AndroidMode::Validation => "已连接 Android 设备，正在验证下单前流程",
+        AndroidMode::Submit => "已连接 Android 设备，正在执行大麦 App 购票流程",
+    }, 1, None);
     let mut command = Command::new(&environment.python);
     command.args(["-m", "mobile.damai_app", "--serial", &config.serial, "--result-json"])
         .arg(&files.result).current_dir(root).env("HATICKETS_CONFIG_PATH", &files.config)
@@ -269,12 +308,16 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
     }
     let Some(summary): Option<RunSummary> = fs::read(&files.result).ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok()) else {
-        return Ok(Outcome::action("Android 执行结果未确认，请先检查大麦 App 官方订单页，避免重复下单", order_list_url("dm").into()));
+        return Ok(if config.mode == AndroidMode::Submit {
+            Outcome::action("Android 执行结果未确认，请先检查大麦 App 官方订单页，避免重复下单", order_list_url("dm").into())
+        } else { Outcome { status: "device_error", message: "Android 调试结果未生成，请检查执行日志".into(), order_url: None } });
     };
     if status.code() != Some(summary.exit_code) {
-        return Ok(Outcome::action("Android 进程退出状态与运行摘要不一致，请检查官方订单", order_list_url("dm").into()));
+        return Ok(if config.mode == AndroidMode::Submit {
+            Outcome::action("Android 进程退出状态与运行摘要不一致，请检查官方订单", order_list_url("dm").into())
+        } else { Outcome { status: "device_error", message: "Android 调试进程与结果不一致，请检查执行日志".into(), order_url: None } });
     }
-    Ok(summary_outcome(&summary, order_list_url("dm")))
+    Ok(summary_outcome(&summary, order_list_url("dm"), config.mode))
 }
 
 #[cfg(test)]
@@ -284,11 +327,31 @@ mod tests {
     fn result_requires_confirmed_submit() {
         let url = order_list_url("dm");
         for outcome in ["order_submitted", "order_pending_payment"] {
-            assert_eq!(summary_outcome(&RunSummary { outcome: outcome.into(), exit_code: 0, mode: Some("submit".into()), terminal_reason: None }, url).status, "succeeded");
+            assert_eq!(summary_outcome(&RunSummary { outcome: outcome.into(), exit_code: 0, mode: Some("submit".into()), terminal_reason: None }, url, AndroidMode::Submit).status, "succeeded");
         }
-        assert_eq!(summary_outcome(&RunSummary { outcome: "order_flow_completed".into(), exit_code: 0, mode: Some("submit".into()), terminal_reason: None }, url).status, "needs_action");
-        assert_eq!(summary_outcome(&RunSummary { outcome: "terminal_failure".into(), exit_code: 11, mode: Some("submit".into()), terminal_reason: Some("submit_unverified".into()) }, url).status, "needs_action");
-        assert_eq!(summary_outcome(&RunSummary { outcome: "retries_exhausted".into(), exit_code: 10, mode: Some("submit".into()), terminal_reason: None }, url).status, "failed");
+        assert_eq!(summary_outcome(&RunSummary { outcome: "order_flow_completed".into(), exit_code: 0, mode: Some("submit".into()), terminal_reason: None }, url, AndroidMode::Submit).status, "needs_action");
+        assert_eq!(summary_outcome(&RunSummary { outcome: "terminal_failure".into(), exit_code: 11, mode: Some("submit".into()), terminal_reason: Some("submit_unverified".into()) }, url, AndroidMode::Submit).status, "needs_action");
+        assert_eq!(summary_outcome(&RunSummary { outcome: "retries_exhausted".into(), exit_code: 10, mode: Some("submit".into()), terminal_reason: None }, url, AndroidMode::Submit).status, "failed");
+    }
+    #[test]
+    fn dry_runs_never_report_new_order() {
+        let url = order_list_url("dm");
+        for (mode, result) in [(AndroidMode::Probe, "probe_ready"), (AndroidMode::Validation, "validation_ready")] {
+            let outcome = summary_outcome(&RunSummary { outcome: result.into(), exit_code: 0, mode: Some(mode.key().into()), terminal_reason: None }, url, mode);
+            assert_eq!(outcome.status, result);
+            assert!(outcome.order_url.is_none());
+            let mismatch = summary_outcome(&RunSummary { outcome: "order_submitted".into(), exit_code: 0, mode: Some("submit".into()), terminal_reason: None }, url, mode);
+            assert_ne!(mismatch.status, "succeeded");
+        }
+    }
+    #[test]
+    fn android_mode_defaults_to_submit_for_existing_tasks() {
+        assert!(serde_json::from_value::<AndroidMode>(json!("invalid")).is_err());
+        let config: AndroidConfig = serde_json::from_value(json!({
+            "serial": "device", "keyword": "event", "users": ["buyer"],
+            "city": "city", "date": "date", "price": "price"
+        })).unwrap();
+        assert_eq!(config.mode.key(), "submit");
     }
     #[test]
     fn device_parser_excludes_headers() {
