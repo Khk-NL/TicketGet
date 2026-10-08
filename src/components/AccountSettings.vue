@@ -12,11 +12,13 @@ const showCookie = ref(false);
 const error = ref("");
 const loginOpen = ref(false);
 const loginBusy = ref(false);
+const windows = navigator.userAgent.includes("Windows");
+const browserChoice = ref("auto");
 async function browserLogin() {
     error.value = "";
     if (!form.name.trim()) { error.value = "请先填写账号名称"; return; }
     loginBusy.value = true;
-    try { await call("start_damai_browser_login"); loginOpen.value = true; }
+    try { await call("start_damai_browser_login", { browserChoice: browserChoice.value }); loginOpen.value = true; }
     catch (value) { error.value = errorText(value); }
     finally { loginBusy.value = false; }
 }
@@ -74,6 +76,8 @@ function makeDefault(id) {
             <div class="label-row"><h3>{{ form.id ? '更新账号' : '添加账号' }}</h3><button v-if="form.id" type="button" class="text-button" :disabled="loginOpen" @click="reset">取消编辑</button></div>
             <div class="field space-top"><label class="field-label" for="account-name">账号名称</label><input id="account-name" class="text-input" v-model="form.name" maxlength="60" placeholder="例如：我的常用账号" autocomplete="off" :disabled="loginOpen" /></div>
             <div v-if="platform === 'dm' && desktop" class="browser-login space-top">
+                <label v-if="windows && !loginOpen" class="field-label" for="login-browser">浏览器</label>
+                <select v-if="windows && !loginOpen" id="login-browser" class="text-input browser-choice" v-model="browserChoice" :disabled="loginBusy"><option value="auto">自动</option><option value="edge">Edge</option><option value="chrome">Chrome</option></select>
                 <button v-if="!loginOpen" class="button small" type="button" :disabled="loginBusy" @click="browserLogin">{{ form.id ? '浏览器刷新 Cookie' : '浏览器登录并获取 Cookie' }}</button>
                 <template v-else><span class="field-hint">请在打开的 Chrome 或 Edge 中登录大麦并访问活动页。</span><button class="button small" type="button" :disabled="loginBusy" @click="captureCookie">读取并保存</button><button class="text-button" type="button" :disabled="loginBusy" @click="cancelLogin">取消</button></template>
             </div>
@@ -97,5 +101,6 @@ function makeDefault(id) {
 .account-description small { display: block; color: var(--muted); font-size: 10px; line-height: 1.7; margin-top: 6px; }
 .account-actions { display: flex; gap: 10px; flex-shrink: 0; flex-wrap: wrap; }
 .browser-login { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.browser-choice { width: 110px; }
 @media (max-width: 700px) { .account-row { align-items: flex-start; flex-direction: column; } }
 </style>

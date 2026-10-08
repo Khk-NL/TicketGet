@@ -11,16 +11,22 @@ impl Default for LoginManager {
     }
 }
 
-fn browser_executables() -> Vec<PathBuf> {
+fn browser_executables(choice: &str) -> Result<Vec<PathBuf>, String> {
+    if !matches!(choice, "auto" | "edge" | "chrome") {
+        return Err("浏览器选择无效".into());
+    }
     let mut paths = Vec::new();
     #[cfg(target_os = "windows")]
     {
-        for (variable, suffix) in [
-            ("PROGRAMFILES(X86)", "Microsoft/Edge/Application/msedge.exe"),
-            ("PROGRAMFILES", "Microsoft/Edge/Application/msedge.exe"),
-            ("PROGRAMFILES", "Google/Chrome/Application/chrome.exe"),
-            ("LOCALAPPDATA", "Google/Chrome/Application/chrome.exe"),
+        for (kind, variable, suffix) in [
+            ("edge", "PROGRAMFILES(X86)", "Microsoft/Edge/Application/msedge.exe"),
+            ("edge", "PROGRAMFILES", "Microsoft/Edge/Application/msedge.exe"),
+            ("edge", "LOCALAPPDATA", "Microsoft/Edge/Application/msedge.exe"),
+            ("chrome", "PROGRAMFILES", "Google/Chrome/Application/chrome.exe"),
+            ("chrome", "PROGRAMFILES(X86)", "Google/Chrome/Application/chrome.exe"),
+            ("chrome", "LOCALAPPDATA", "Google/Chrome/Application/chrome.exe"),
         ] {
+            if choice != "auto" && choice != kind { continue; }
             if let Some(root) = std::env::var_os(variable) {
                 let path = PathBuf::from(root).join(suffix);
                 if path.is_file() {
@@ -29,7 +35,11 @@ fn browser_executables() -> Vec<PathBuf> {
             }
         }
     }
-    paths
+    #[cfg(not(target_os = "windows"))]
+    if choice != "auto" {
+        return Err("此平台暂不支持指定浏览器，请选择自动".into());
+    }
+    Ok(paths)
 }
 
 fn cookie_header(cookies: &[Cookie]) -> Result<String, String> {
@@ -57,15 +67,17 @@ fn cookie_header(cookies: &[Cookie]) -> Result<String, String> {
 #[tauri::command]
 pub async fn start_damai_browser_login(
     manager: tauri::State<'_, LoginManager>,
+    browser_choice: String,
 ) -> Result<(), String> {
     let mut session = manager.0.lock().await;
     if session.is_some() {
         return Err("登录浏览器已打开，请完成读取或取消".into());
     }
-    let paths = browser_executables();
+    let paths = browser_executables(&browser_choice)?;
     #[cfg(target_os = "windows")]
     if paths.is_empty() {
-        return Err("未找到 Edge 或 Chrome，请检查浏览器安装路径".into());
+        let name = match browser_choice.as_str() { "edge" => "Edge", "chrome" => "Chrome", _ => "Edge 或 Chrome" };
+        return Err(format!("未找到{name}，请检查浏览器安装路径"));
     }
     let candidates: Vec<Option<PathBuf>> = if paths.is_empty() { vec![None] } else { paths.into_iter().map(Some).collect() };
     let mut failures = Vec::new();
