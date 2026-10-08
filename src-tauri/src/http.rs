@@ -7,6 +7,12 @@ pub fn user_agent() -> String {
     ua_generator::ua::spoof_ua().to_string()
 }
 
+pub fn requires_manual_action(error: &str) -> bool {
+    ["登录状态失效或访问受限", "请求受限", "FAIL_SYS_USER_VALIDATE", "验证码"]
+        .iter()
+        .any(|marker| error.contains(marker))
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Account {

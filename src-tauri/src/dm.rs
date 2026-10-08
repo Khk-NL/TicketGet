@@ -297,7 +297,7 @@ fn order_payload(detail: &Value, buyers: &[String], count: u32) -> Result<Value,
 }
 
 fn terminal(message: &str) -> bool {
-    [
+    http::requires_manual_action(message) || [
         "VALIDATE",
         "TOKEN",
         "SESSION",
@@ -412,6 +412,13 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn access_restrictions_stop_purchase_attempts() {
+        assert!(terminal("请求受限，请稍后重试或在官方页面完成验证"));
+        assert!(terminal("FAIL_SYS_USER_VALIDATE"));
+        assert!(!terminal("票档已售罄"));
+    }
 
     #[test]
     fn selected_viewer_count_and_hierarchy_are_preserved() {

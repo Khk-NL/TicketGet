@@ -29,6 +29,8 @@ pub struct Config {
     purchase_interval_ms: Option<u64>,
 }
 
+const MANUAL_ACTION: &str = "平台要求人工处理或已限制访问，监控已停止；请在官方页面检查账号和验证状态";
+
 fn purchase_config(config: &Config, platform: &str) -> Result<Option<Value>, String> {
     let Some(mut purchase) = config.purchase.clone() else { return Ok(None) };
     let data = purchase.as_object_mut().ok_or("自动购票参数无效")?;
@@ -305,7 +307,11 @@ where
                 }
                 .to_string()
             }
-            Err(_) => {
+            Err(error) => {
+                if http::requires_manual_action(&error) {
+                    report(attempt, MANUAL_ACTION);
+                    return Err(MANUAL_ACTION.into());
+                }
                 errors += 1;
                 if errors >= 5 {
                     report(attempt, "连续 5 次查询失败，监控停止");
@@ -362,14 +368,21 @@ pub async fn run(context: &TaskContext) -> Result<Outcome, String> {
     let found = if config.end_at > 0 {
         let delay = clock::delay_ms(config.end_at, context.request.offset_ms, clock::now_ms());
         if delay == 0 {
-            false
+            Ok(false)
         } else {
             tokio::time::timeout(Duration::from_millis(delay), polling)
                 .await
-                .unwrap_or(Ok(false))?
+                .unwrap_or(Ok(false))
         }
     } else {
-        polling.await?
+        polling.await
+    };
+    let found = match found {
+        Ok(found) => found,
+        Err(error) if error == MANUAL_ACTION => {
+            return Ok(Outcome::action(MANUAL_ACTION, project_url(&context.request.platform, &config.project_id)));
+        }
+        Err(error) => return Err(error),
     };
     if !found {
         return Ok(Outcome {
@@ -424,7 +437,10 @@ async fn run_auto(context: &TaskContext, config: &Config, purchase: Value) -> Re
                 errors = 0;
                 context.report("running", "票档状态未知，等待下一次查询", attempt, None);
             }
-            Err(_) => {
+            Err(error) => {
+                if http::requires_manual_action(&error) {
+                    return Ok(Outcome::action(MANUAL_ACTION, project_url(&context.request.platform, &config.project_id)));
+                }
                 errors += 1;
                 if errors >= 5 {
                     return Err("连续 5 次查询失败，监控已停止；请检查网络、Cookie 和官方页面是否需要验证".into());
@@ -609,6 +625,26 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("连续 5 次"));
         assert!(!error.contains("private"));
+    }
+
+    #[tokio::test]
+    async fn polling_stops_on_access_restriction_without_retrying() {
+        let mut checks = 0;
+        let mut reports = Vec::new();
+        let error = poll(
+            0,
+            0,
+            || {
+                checks += 1;
+                std::future::ready(Err("请求受限，请稍后重试或在官方页面完成验证".into()))
+            },
+            |_, message| reports.push(message.to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(checks, 1);
+        assert_eq!(error, MANUAL_ACTION);
+        assert_eq!(reports, vec![MANUAL_ACTION.to_string()]);
     }
 
     #[tokio::test]
