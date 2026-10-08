@@ -11,7 +11,8 @@ impl Default for LoginManager {
     }
 }
 
-fn browser_executable() -> Option<PathBuf> {
+fn browser_executables() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
     #[cfg(target_os = "windows")]
     {
         for (variable, suffix) in [
@@ -23,12 +24,12 @@ fn browser_executable() -> Option<PathBuf> {
             if let Some(root) = std::env::var_os(variable) {
                 let path = PathBuf::from(root).join(suffix);
                 if path.is_file() {
-                    return Some(path);
+                    paths.push(path);
                 }
             }
         }
     }
-    None
+    paths
 }
 
 fn cookie_header(cookies: &[Cookie]) -> Result<String, String> {
@@ -61,14 +62,27 @@ pub async fn start_damai_browser_login(
     if session.is_some() {
         return Err("登录浏览器已打开，请完成读取或取消".into());
     }
-    let mut builder = BrowserConfig::builder().with_head().incognito();
-    if let Some(path) = browser_executable() {
-        builder = builder.chrome_executable(path);
+    let paths = browser_executables();
+    #[cfg(target_os = "windows")]
+    if paths.is_empty() {
+        return Err("未找到 Edge 或 Chrome，请检查浏览器安装路径".into());
     }
-    let config = builder.build().map_err(|_| "浏览器配置失败".to_string())?;
-    let (browser, mut handler) = Browser::launch(config)
-        .await
-        .map_err(|_| "无法启动 Chrome 或 Edge，请先安装浏览器后重试".to_string())?;
+    let candidates: Vec<Option<PathBuf>> = if paths.is_empty() { vec![None] } else { paths.into_iter().map(Some).collect() };
+    let mut failures = Vec::new();
+    let mut launched = None;
+    for path in candidates {
+        let mut builder = BrowserConfig::builder().with_head().incognito();
+        if let Some(path) = &path { builder = builder.chrome_executable(path); }
+        let config = builder.build().map_err(|error| format!("浏览器配置失败：{error}"))?;
+        match Browser::launch(config).await {
+            Ok(value) => { launched = Some(value); break; }
+            Err(error) => {
+                let name = path.as_ref().and_then(|value| value.file_name()).and_then(|value| value.to_str()).unwrap_or("默认浏览器");
+                failures.push(format!("{name}: {error}"));
+            }
+        }
+    }
+    let (browser, mut handler) = launched.ok_or_else(|| format!("浏览器启动失败：{}", failures.join("；")))?;
     tokio::spawn(async move { while handler.next().await.is_some() {} });
     if browser.new_page("https://m.damai.cn/").await.is_err() {
         return Err("大麦登录页面打开失败，请检查网络连接".into());
